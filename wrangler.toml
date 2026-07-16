@@ -1,3 +1,4 @@
 name = "opencode-proxy"
 main = "cf-workers/index.ts"
 compatibility_date = "2026-07-16"
+placement = { mode = "smart" }
