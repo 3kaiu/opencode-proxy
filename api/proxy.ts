@@ -1,4 +1,5 @@
 // opencode-proxy — Vercel Edge Function（单文件，无外部依赖）
+declare var process: { env: Record<string, string | undefined> }
 
 const TARGET_HOST = "https://opencode.ai"
 const REQUEST_TIMEOUT_MS = 60_000
