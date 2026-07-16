@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "devDependencies": {
-    "@netlify/edge-functions": "^2.0.0"
+    "@netlify/edge-functions": "^2.0.0",
+    "@types/aws-lambda": "^8.10.147"
   }
 }
