@@ -8,9 +8,9 @@
 | **Cloudflare Workers** | Cloudflare Workers | Edge | ✅ 可用 | `cf-workers/index.ts` |
 | **Netlify** | Netlify Edge Functions | Edge | ✅ 可用 | `netlify/edge-functions/proxy.ts` |
 | **AWS Lambda** | Lambda + API Gateway | Serverless | ✅ 可用 | `aws-lambda/index.ts` |
-| **Deno Deploy** | Deno Deploy | Edge | ⚠️ 需绑卡验证 | `deno/main.ts` |
+| **Deno Deploy** | Deno Deploy | Edge | ✅ 可用（需绑卡验证） | `deno/main.ts` |
 
-> **Deno Deploy 状态说明**：Deno Deploy Free 计划从 2024 年中起要求组织验证（绑定信用卡/企业验证），否则只能使用 Free 计划的 1% 配额（约 1 万请求/月、0.2GB 出口流量）。代码已保留，待验证后即可启用。
+> **Deno Deploy 说明**：Deno Deploy Free 计划需要绑定信用卡完成组织验证才能使用完整配额，否则只有 1%。代码已就绪，绑卡后即可部署。
 
 ## 架构
 
@@ -21,9 +21,8 @@
   ├── Vercel Edge Function
   ├── Cloudflare Workers
   ├── Netlify Edge Functions
-  ├── Google Cloud Run
   ├── AWS Lambda + API Gateway
-  └── Deno Deploy（待验证）
+  └── Deno Deploy
 ```
 
 ## 部署
@@ -54,21 +53,6 @@
 4. 创建 Deploy Hook：Deploy → Deploy settings → Build hooks → Add build hook
 5. 将生成的 Hook URL 设为 `DEPLOY_HOOK_URL` 的值
 
-### Google Cloud Run
-
-1. 构建 Docker 镜像并推送到 Artifact Registry：
-   ```bash
-   gcloud builds submit --tag gcr.io/你的项目/opencode-proxy
-   ```
-2. 部署到 Cloud Run：
-   ```bash
-   gcloud run deploy opencode-proxy \
-     --image gcr.io/你的项目/opencode-proxy \
-     --allow-unauthenticated \
-     --set-env-vars "DEPLOY_HOOK_URL=你的-hook-url"
-   ```
-3. 创建 Deploy Hook：Cloud Run 的 Deploy Hook 通过 Cloud Build 触发器实现，或手动 `gcloud run deploy` 重建
-
 ### AWS Lambda + API Gateway
 
 1. 编译 TypeScript 并打包：
@@ -77,16 +61,15 @@
    cd dist && zip -r ../lambda.zip .
    ```
 2. 在 AWS Console 创建 Lambda 函数（Node.js 20），上传 `lambda.zip`
-3. 设置环境变量 `DEPLOY_HOOK_URL`
-4. 创建 API Gateway（HTTP API 或 REST API），将全部请求路由到 Lambda
-5. 创建 Deploy Hook：通过 AWS CodePipeline 或 `aws lambda update-function-code` 实现
+3. 创建 API Gateway（HTTP API 或 REST API），将全部请求路由到 Lambda
+4. 出口 IP 由 AWS 自动分配，自动变化，无需手动触发重建
 
 ### Deno Deploy
 
 1. 在 [Deno Deploy](https://dash.deno.com) 创建项目
 2. 入口文件设为 `deno/main.ts`
 3. 项目设置 → Deploy Hooks → 创建 Hook
-4. 复制 Hook URL，设为环境变量 `DENO_DEPLOY_HOOK_URL`
+4. 复制 Hook URL，设为环境变量 `DEPLOY_HOOK_URL`
 5. 部署
 
 ## 本地配置
@@ -109,21 +92,21 @@ base_url = "https://你的-workers-域名.workers.dev"
 
 ```toml
 [model.provider.opencode]
-base_url = "https://你的-cloud-run-域名.run.app"
+base_url = "https://你的-api-gateway-域名.execute-api.区域.amazonaws.com"
 ```
 
 或
 
 ```toml
 [model.provider.opencode]
-base_url = "https://你的-api-gateway-域名.execute-api.区域.amazonaws.com"
+base_url = "https://你的-deno-域名.deno.dev"
 ```
 
 ## 环境变量
 
 | 变量 | 平台 | 说明 |
 |------|------|------|
-| `DEPLOY_HOOK_URL` | 所有平台 | 平台 Deploy Hook URL，触发重新部署 |
+| `DEPLOY_HOOK_URL` | Vercel / CF Workers / Netlify / Deno | 平台 Deploy Hook URL，触发重新部署 |
 
 ## 检测与切换
 
@@ -145,9 +128,6 @@ opencode-proxy/
 ├── deno/
 │   ├── main.ts                   ← Deno Deploy 入口
 │   └── deno.json
-├── gcp-cloud-run/
-│   ├── index.ts                  ← Google Cloud Run 入口
-│   └── Dockerfile                ← Cloud Run 容器构建
 ├── aws-lambda/
 │   └── index.ts                  ← AWS Lambda + API Gateway 入口
 ├── netlify/

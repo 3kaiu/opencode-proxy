@@ -7,7 +7,7 @@ export default async function handler(request: Request): Promise<Response> {
 
   // 检测到限流后，触发自我重新部署以换出口 IP
   if (await isFreeUsageExceeded(response)) {
-    const hookUrl = process.env.VERCEL_DEPLOY_HOOK_URL
+    const hookUrl = process.env.DEPLOY_HOOK_URL
     if (hookUrl) {
       triggerSelfRedeploy(hookUrl).catch(console.error)
     }

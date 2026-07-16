@@ -36,5 +36,4 @@ export default async (request: Request, context: Context): Promise<Response> => 
 
 export const config = {
   path: "/*",
-  excludedPath: "/",
 }

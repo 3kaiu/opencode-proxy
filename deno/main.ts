@@ -26,7 +26,7 @@ Deno.serve(async (req) => {
 
   // 检测到限流后，后台触发自我重新部署以换出口 IP
   if (await isFreeUsageExceeded(response)) {
-    const hookUrl = Deno.env.get("DENO_DEPLOY_HOOK_URL")
+    const hookUrl = Deno.env.get("DEPLOY_HOOK_URL")
     triggerSelfRedeploy(hookUrl).catch(console.error)
   }
 

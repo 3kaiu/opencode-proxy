@@ -39,6 +39,7 @@ export async function proxyToOpenCode(request: Request): Promise<Response> {
     forwardHeaders.set("Content-Type", "application/json")
   }
 
+  // 直接返回原始 Response，不读 body，支持流式 SSE 透传
   return await fetch(target, {
     method: request.method,
     headers: forwardHeaders,
