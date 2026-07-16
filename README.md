@@ -7,7 +7,6 @@
 | **Vercel** | Vercel Edge Function | Edge | ✅ 可用 | `api/proxy.ts` |
 | **Cloudflare Workers** | Cloudflare Workers | Edge | ✅ 可用 | `cf-workers/index.ts` |
 | **Netlify** | Netlify Edge Functions | Edge | ✅ 可用 | `netlify/edge-functions/proxy.ts` |
-| **AWS Lambda** | Lambda + API Gateway | Serverless | ✅ 可用 | `aws-lambda/index.ts` |
 | **Deno Deploy** | Deno Deploy | Edge | ✅ 可用（需绑卡验证） | `deno/main.ts` |
 
 > **Deno Deploy 说明**：Deno Deploy Free 计划需要绑定信用卡完成组织验证才能使用完整配额，否则只有 1%。代码已就绪，绑卡后即可部署。
@@ -21,7 +20,6 @@
   ├── Vercel Edge Function
   ├── Cloudflare Workers
   ├── Netlify Edge Functions
-  ├── AWS Lambda + API Gateway
   └── Deno Deploy
 ```
 
@@ -53,11 +51,9 @@
 4. 创建 Deploy Hook：Deploy → Deploy settings → Build hooks → Add build hook
 5. 将生成的 Hook URL 设为 `DEPLOY_HOOK_URL` 的值
 
-### AWS Lambda + API Gateway
 
 1. 编译 TypeScript 并打包：
    ```bash
-   npx tsc aws-lambda/index.ts --outDir dist --module commonjs --target es2022
    cd dist && zip -r ../lambda.zip .
    ```
 2. 在 AWS Console 创建 Lambda 函数（Node.js 20），上传 `lambda.zip`
@@ -128,8 +124,6 @@ opencode-proxy/
 ├── deno/
 │   ├── main.ts                   ← Deno Deploy 入口
 │   └── deno.json
-├── aws-lambda/
-│   └── index.ts                  ← AWS Lambda + API Gateway 入口
 ├── netlify/
 │   └── edge-functions/
 │       └── proxy.ts              ← Netlify Edge Functions 入口
