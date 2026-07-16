@@ -1,5 +1,8 @@
 {
   "name": "opencode-proxy",
   "version": "1.0.0",
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "@netlify/edge-functions": "^2.0.0"
+  }
 }

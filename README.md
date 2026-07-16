@@ -1,23 +1,25 @@
 # opencode-proxy
 
-三出口代理，用于 opencode.ai API 的流量代理和出口 IP 自动切换。
+四出口代理，用于 opencode.ai API 的流量代理和出口 IP 自动切换。
 
 | 出口 | 平台 | 状态 | 入口 |
 |------|------|------|------|
 | **Vercel** | Vercel Edge Function | ✅ 可用 | `api/proxy.ts` |
 | **Cloudflare Workers** | Cloudflare Workers | ✅ 可用 | `cf-workers/index.ts` |
+| **Netlify** | Netlify Edge Functions | ✅ 可用 | `netlify/edge-functions/proxy.ts` |
 | **Deno Deploy** | Deno Deploy | ⚠️ 需绑卡验证 | `deno/main.ts` |
 
 > **Deno Deploy 状态说明**：Deno Deploy Free 计划从 2024 年中起要求组织验证（绑定信用卡/企业验证），否则只能使用 Free 计划的 1% 配额（约 1 万请求/月、0.2GB 出口流量）。代码已保留，待验证后即可启用。
 
 ## 架构
 
-三个独立部署，**没有主备关系**。各自在检测到 `Free usage exceeded, subscribe to Go` 限流后，通过平台 Deploy Hook 触发自我重新部署，以获得新的出口 IP。
+四个独立部署，**没有主备关系**。各自在检测到 `Free usage exceeded, subscribe to Go` 限流后，通过平台 Deploy Hook 触发自我重新部署，以获得新的出口 IP。
 
 ```
 用户（本地 opencodex 配置中手动选择出口）
   ├── Vercel Edge Function
   ├── Cloudflare Workers
+  ├── Netlify Edge Functions
   └── Deno Deploy（待验证）
 ```
 
@@ -40,6 +42,14 @@
    echo <DEPLOY_HOOK_URL> | wrangler secret put DEPLOY_HOOK_URL
    ```
 5. Cloudflare Workers 的 Deploy Hook 需要在 Dashboard → Workers → 选择项目 → Deployments → Create via API 创建
+
+### Netlify
+
+1. 在 [Netlify](https://netlify.com) 导入此仓库
+2. 部署会自动识别 `netlify.toml` 和 `netlify/edge-functions/proxy.ts`
+3. 设置环境变量 `DEPLOY_HOOK_URL`
+4. 创建 Deploy Hook：Deploy → Deploy settings → Build hooks → Add build hook
+5. 将生成的 Hook URL 设为 `DEPLOY_HOOK_URL` 的值
 
 ### Deno Deploy
 
@@ -65,11 +75,18 @@ base_url = "https://你的-vercel-域名.vercel.app"
 base_url = "https://你的-workers-域名.workers.dev"
 ```
 
+或
+
+```toml
+[model.provider.opencode]
+base_url = "https://你的-netlify-域名.netlify.app"
+```
+
 ## 环境变量
 
 | 变量 | 平台 | 说明 |
 |------|------|------|
-| `DEPLOY_HOOK_URL` | Vercel / Cloudflare | 平台 Deploy Hook URL，触发重新部署 |
+| `DEPLOY_HOOK_URL` | Vercel / Cloudflare / Netlify | 平台 Deploy Hook URL，触发重新部署 |
 | `DENO_DEPLOY_HOOK_URL` | Deno | Deno Deploy Hook URL，触发重新部署 |
 
 ## 检测与切换
@@ -86,17 +103,21 @@ base_url = "https://你的-workers-域名.workers.dev"
 ```
 opencode-proxy/
 ├── api/
-│   └── proxy.ts              ← Vercel Edge Function 入口
+│   └── proxy.ts                  ← Vercel Edge Function 入口
 ├── cf-workers/
-│   └── index.ts              ← Cloudflare Workers 入口
+│   └── index.ts                  ← Cloudflare Workers 入口
 ├── deno/
-│   ├── main.ts               ← Deno Deploy 入口
+│   ├── main.ts                   ← Deno Deploy 入口
 │   └── deno.json
+├── netlify/
+│   └── edge-functions/
+│       └── proxy.ts              ← Netlify Edge Functions 入口
 ├── shared/
-│   ├── proxy.ts              ← 共享代理核心
-│   ├── detection.ts          ← 限流检测
-│   └── redeploy.ts           ← 自我重新部署触发
-├── wrangler.toml             ← Cloudflare Workers 配置
+│   ├── proxy.ts                  ← 共享代理核心
+│   ├── detection.ts              ← 限流检测
+│   └── redeploy.ts               ← 自我重新部署触发
+├── netlify.toml                  ← Netlify 配置
+├── wrangler.toml                 ← Cloudflare Workers 配置
 ├── vercel.json
 ├── package.json
 └── README.md
