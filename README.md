@@ -7,7 +7,6 @@
 | **Vercel** | Vercel Edge Function | Edge | ✅ 可用 | `api/proxy.ts` |
 | **Cloudflare Workers** | Cloudflare Workers | Edge | ✅ 可用 | `cf-workers/index.ts` |
 | **Netlify** | Netlify Edge Functions | Edge | ✅ 可用 | `netlify/edge-functions/proxy.ts` |
-| **GCP Cloud Run** | Google Cloud Run | Container | ✅ 可用 | `gcp-cloud-run/index.ts` |
 | **AWS Lambda** | Lambda + API Gateway | Serverless | ✅ 可用 | `aws-lambda/index.ts` |
 | **Deno Deploy** | Deno Deploy | Edge | ⚠️ 需绑卡验证 | `deno/main.ts` |
 
