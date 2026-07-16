@@ -8,13 +8,15 @@ const CORS_HEADERS = {
   "Access-Control-Max-Age": "86400",
 }
 
-// 健康检查响应
-const HEALTH_RESPONSE = new Response(
-  JSON.stringify({ status: "ok", version: "1.0.0" }),
-  {
-    headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-  },
-)
+// 健康检查响应（惰性创建，避免 CF Workers 全局作用域限制）
+function healthResponse(): Response {
+  return new Response(
+    JSON.stringify({ status: "ok", version: "1.0.0" }),
+    {
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+    },
+  )
+}
 
 // 随机 User-Agent 池 — 模拟不同客户端指纹，增加链路多样性
 const USER_AGENTS = [
@@ -51,7 +53,7 @@ export async function proxyToOpenCode(request: Request): Promise<Response> {
   const url = new URL(request.url)
 
   // 健康检查
-  if (url.pathname === "/health") return HEALTH_RESPONSE
+  if (url.pathname === "/health") return healthResponse()
 
   const target = TARGET_HOST + url.pathname + url.search
 
