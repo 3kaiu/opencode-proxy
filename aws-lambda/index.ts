@@ -1,12 +1,10 @@
 import { proxyToOpenCode } from "../shared/proxy.js"
-import { isFreeUsageExceeded } from "../shared/detection.js"
-import { triggerSelfRedeploy } from "../shared/redeploy.js"
 
 // AWS Lambda + API Gateway 入口
 // API Gateway 配置: REST API (REST) 或 HTTP API，将全部请求转发到 Lambda
 // Lambda 运行时: Node.js 20 (或 22)
-// 需要环境变量: DEPLOY_HOOK_URL
 // 部署方式: 打包为 zip 上传，或通过 SAM/Serverless Framework/CDK
+// 出口 IP 是 AWS 随机分配的，自动变化，不需要手动触发重建
 
 import type { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from "aws-lambda"
 
@@ -37,12 +35,6 @@ export const handler = async (event: APIGatewayProxyEvent, _context: Context): P
   })
 
   const response = await proxyToOpenCode(request)
-
-  // 检测到限流后，触发自我重新部署以换出口 IP
-  if (await isFreeUsageExceeded(response)) {
-    const hookUrl = process.env.DEPLOY_HOOK_URL
-    triggerSelfRedeploy(hookUrl).catch(console.error)
-  }
 
   // 转发响应
   const responseBody = await response.text()
