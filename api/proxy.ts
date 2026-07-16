@@ -1,8 +1,12 @@
-import { proxyToOpenCode } from "../shared/proxy"
+import { handlePreflight, proxyToOpenCode } from "../shared/proxy"
 import { isFreeUsageExceeded } from "../shared/detection"
 import { triggerSelfRedeploy } from "../shared/redeploy"
 
 export default async function handler(request: Request): Promise<Response> {
+  // CORS preflight / method check
+  const preflight = handlePreflight(request)
+  if (preflight) return preflight
+
   const response = await proxyToOpenCode(request)
 
   // 检测到限流后，触发自我重新部署以换出口 IP

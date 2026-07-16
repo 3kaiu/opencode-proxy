@@ -65,14 +65,14 @@ base_url = "https://你的-workers-域名.workers.dev"
 
 ```toml
 [model.provider.opencode]
-base_url = "https://你的-api-gateway-域名.execute-api.区域.amazonaws.com"
+base_url = "https://你的-deno-域名.deno.dev"
 ```
 
 或
 
 ```toml
 [model.provider.opencode]
-base_url = "https://你的-deno-域名.deno.dev"
+base_url = "https://你的-netlify-域名.netlify.app"
 ```
 
 ## 环境变量
@@ -105,12 +105,22 @@ opencode-proxy/
 │   └── edge-functions/
 │       └── proxy.ts              ← Netlify Edge Functions 入口
 ├── shared/
-│   ├── proxy.ts                  ← 共享代理核心
+│   ├── proxy.ts                  ← 共享代理核心（CORS、超时、健康检查、转发）
 │   ├── detection.ts              ← 限流检测
 │   └── redeploy.ts               ← 自我重新部署触发
+├── AUDIT.md                      ← 全面审计报告
 ├── netlify.toml
 ├── wrangler.toml
 ├── vercel.json
 ├── package.json
 └── README.md
+```
+
+## 健康检查
+
+每个平台都提供 `/health` 端点，可用于监控代理是否在线：
+
+```bash
+curl https://你的代理域名/health
+# {"status":"ok","version":"1.0.0"}
 ```

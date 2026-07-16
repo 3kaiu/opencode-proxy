@@ -1,4 +1,20 @@
 const TARGET_HOST = "https://opencode.ai"
+const REQUEST_TIMEOUT_MS = 60_000
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "*",
+  "Access-Control-Max-Age": "86400",
+}
+
+// 健康检查响应
+const HEALTH_RESPONSE = new Response(
+  JSON.stringify({ status: "ok", version: "1.0.0" }),
+  {
+    headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+  },
+)
 
 // 随机 User-Agent 池 — 模拟不同客户端指纹，增加链路多样性
 const USER_AGENTS = [
@@ -17,8 +33,26 @@ const randomHex = (bytes = 8) => {
   return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("")
 }
 
+/** 处理 CORS preflight 和 method 校验，返回 null 表示通过 */
+export function handlePreflight(request: Request): Response | null {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { headers: CORS_HEADERS })
+  }
+  if (request.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Only POST allowed" }), {
+      status: 405,
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+    })
+  }
+  return null
+}
+
 export async function proxyToOpenCode(request: Request): Promise<Response> {
   const url = new URL(request.url)
+
+  // 健康检查
+  if (url.pathname === "/health") return HEALTH_RESPONSE
+
   const target = TARGET_HOST + url.pathname + url.search
 
   const body =
@@ -35,14 +69,21 @@ export async function proxyToOpenCode(request: Request): Promise<Response> {
   }
   forwardHeaders.set("User-Agent", randomUserAgent())
   forwardHeaders.set("X-Random-ID", randomHex(8))
-  if (!forwardHeaders.has("Content-Type")) {
-    forwardHeaders.set("Content-Type", "application/json")
-  }
+  // 透传客户端 Content-Type，若无则默认
+  const clientContentType = request.headers.get("Content-Type")
+  forwardHeaders.set("Content-Type", clientContentType || "application/json")
 
-  // 直接返回原始 Response，不读 body，支持流式 SSE 透传
-  return await fetch(target, {
-    method: request.method,
-    headers: forwardHeaders,
-    body,
-  })
+  // 带超时的 fetch，直接返回原始 Response 以支持流式 SSE 透传
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    return await fetch(target, {
+      method: request.method,
+      headers: forwardHeaders,
+      body,
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
 }

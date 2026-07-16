@@ -1,27 +1,12 @@
 import type { Config, Context } from "@netlify/edge-functions"
-import { proxyToOpenCode } from "../shared/proxy.ts"
+import { handlePreflight, proxyToOpenCode } from "../shared/proxy.ts"
 import { isFreeUsageExceeded } from "../shared/detection.ts"
 import { triggerSelfRedeploy } from "../shared/redeploy.ts"
 
 export default async (request: Request, context: Context): Promise<Response> => {
-  // CORS preflight
-  if (request.method === "OPTIONS") {
-    return new Response(null, {
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "*",
-        "Access-Control-Max-Age": "86400",
-      },
-    })
-  }
-
-  if (request.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Only POST allowed" }), {
-      status: 405,
-      headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
-    })
-  }
+  // CORS preflight / method check
+  const preflight = handlePreflight(request)
+  if (preflight) return preflight
 
   const response = await proxyToOpenCode(request)
 

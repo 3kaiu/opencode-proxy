@@ -1,4 +1,4 @@
-import { proxyToOpenCode } from "../shared/proxy"
+import { handlePreflight, proxyToOpenCode } from "../shared/proxy"
 import { isFreeUsageExceeded } from "../shared/detection"
 import { triggerSelfRedeploy } from "../shared/redeploy"
 
@@ -8,24 +8,9 @@ export default {
     env: { DEPLOY_HOOK_URL?: string },
     ctx: ExecutionContext,
   ): Promise<Response> {
-    // CORS preflight
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
-          "Access-Control-Allow-Headers": "*",
-          "Access-Control-Max-Age": "86400",
-        },
-      })
-    }
-
-    if (request.method !== "POST") {
-      return new Response(JSON.stringify({ error: "Only POST allowed" }), {
-        status: 405,
-        headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
-      })
-    }
+    // CORS preflight / method check
+    const preflight = handlePreflight(request)
+    if (preflight) return preflight
 
     const response = await proxyToOpenCode(request)
 
