@@ -27,46 +27,23 @@
 
 ### Vercel
 
-1. 在 [Vercel](https://vercel.com) 导入此仓库
-2. 项目设置 → Git → Deploy Hooks → 创建 Hook
-3. 复制 Hook URL，设为环境变量 `DEPLOY_HOOK_URL`
-4. 部署
+1. 在 [Vercel](https://vercel.com) 导入此仓库 — 自动识别 `api/proxy.ts`
+2. 设置环境变量 `DEPLOY_HOOK_URL`（Deploy Hook 在 Dashboard → Git → Deploy Hooks 创建）
 
 ### Cloudflare Workers
 
-1. 安装 Wrangler CLI：`npm install -g wrangler`
-2. 登录：`wrangler login`
-3. 部署：`wrangler deploy`
-4. 设置 Deploy Hook Secret：
-   ```bash
-   echo <DEPLOY_HOOK_URL> | wrangler secret put DEPLOY_HOOK_URL
-   ```
-5. Cloudflare Workers 的 Deploy Hook 需要在 Dashboard → Workers → 选择项目 → Deployments → Create via API 创建
+1. 在 Dashboard 创建 Worker，或 `npm install -g wrangler && wrangler deploy`
+2. 设置环境变量 `DEPLOY_HOOK_URL`（Deploy Hook 在 Dashboard → Deployments → Create via API 创建）
 
 ### Netlify
 
-1. 在 [Netlify](https://netlify.com) 导入此仓库
-2. 部署会自动识别 `netlify.toml` 和 `netlify/edge-functions/proxy.ts`
-3. 设置环境变量 `DEPLOY_HOOK_URL`
-4. 创建 Deploy Hook：Deploy → Deploy settings → Build hooks → Add build hook
-5. 将生成的 Hook URL 设为 `DEPLOY_HOOK_URL` 的值
-
-
-1. 编译 TypeScript 并打包：
-   ```bash
-   cd dist && zip -r ../lambda.zip .
-   ```
-2. 在 AWS Console 创建 Lambda 函数（Node.js 20），上传 `lambda.zip`
-3. 创建 API Gateway（HTTP API 或 REST API），将全部请求路由到 Lambda
-4. 出口 IP 由 AWS 自动分配，自动变化，无需手动触发重建
+1. 在 [Netlify](https://netlify.com) 导入此仓库 — 自动识别 `netlify.toml`
+2. 设置环境变量 `DEPLOY_HOOK_URL`（Deploy Hook 在 Deploy → Build hooks 创建）
 
 ### Deno Deploy
 
-1. 在 [Deno Deploy](https://dash.deno.com) 创建项目
-2. 入口文件设为 `deno/main.ts`
-3. 项目设置 → Deploy Hooks → 创建 Hook
-4. 复制 Hook URL，设为环境变量 `DEPLOY_HOOK_URL`
-5. 部署
+1. 在 [Deno Deploy](https://dash.deno.com) 导入此仓库，入口 `deno/main.ts`
+2. 设置环境变量 `DEPLOY_HOOK_URL`（Deploy Hook 在项目 Settings → Deploy Hooks 创建）
 
 ## 本地配置
 
