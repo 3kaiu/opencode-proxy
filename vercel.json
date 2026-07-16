@@ -1,6 +1,3 @@
 {
-  "functions": {
-    "api/proxy.ts": { "memory": 128, "runtime": "edge" }
-  },
   "rewrites": [{ "source": "/(.*)", "destination": "/api/proxy" }]
 }
