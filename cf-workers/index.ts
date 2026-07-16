@@ -49,6 +49,11 @@ function handlePreflight(request) {
 async function proxyToOpenCode(request) {
   const url = new URL(request.url)
   if (url.pathname === "/health") return healthResponse()
+  if (url.pathname === "/myip") {
+    const ipResp = await fetch("https://ifconfig.me", { headers: { "User-Agent": "curl" } })
+    const ip = await ipResp.text()
+    return new Response(ip.trim(), { headers: { "Content-Type": "text/plain" } })
+  }
 
   const target = TARGET_HOST + url.pathname + url.search
 
