@@ -86,7 +86,11 @@ async function proxyToOpenCode(request) {
 async function isFreeUsageExceeded(response) {
   if (response.status !== 403 && response.status !== 429) return false
   const text = await response.clone().text()
-  return text.includes("Free usage exceeded, subscribe to Go")
+  return (
+    text.includes("Free usage exceeded, subscribe to Go") ||
+    text.includes("FreeUsageLimitError") ||
+    text.includes("Rate limit exceeded")
+  )
 }
 
 async function triggerSelfRedeploy(hookUrl) {
