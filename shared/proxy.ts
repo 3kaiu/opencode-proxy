@@ -3,7 +3,7 @@ const REQUEST_TIMEOUT_MS = 60_000
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "*",
   "Access-Control-Max-Age": "86400",
 }
@@ -40,8 +40,8 @@ export function handlePreflight(request: Request): Response | null {
   if (request.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS })
   }
-  if (request.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Only POST allowed" }), {
+  if (request.method !== "POST" && request.method !== "GET") {
+    return new Response(JSON.stringify({ error: "Only GET and POST allowed" }), {
       status: 405,
       headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
     })
