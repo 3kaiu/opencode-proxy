@@ -77,8 +77,19 @@ function saveConfig(cfg: OcConfig): void {
 }
 
 function findEndpoint(cfg: OcConfig, name: string): Endpoint | null {
+  // Exact match
   for (const ep of cfg.endpoints) {
     if (ep.name === name) return ep;
+  }
+  // Case-insensitive match
+  const lower = name.toLowerCase();
+  for (const ep of cfg.endpoints) {
+    if (ep.name.toLowerCase() === lower) return ep;
+  }
+  // Numeric index match (1-based)
+  const idx = parseInt(name, 10);
+  if (!isNaN(idx) && idx >= 1 && idx <= cfg.endpoints.length) {
+    return cfg.endpoints[idx - 1];
   }
   return null;
 }
@@ -188,10 +199,11 @@ function cmdList(): void {
     console.log("No endpoints. Use: oc add <name> <url>");
     return;
   }
-  for (const ep of cfg.endpoints) {
+  for (let i = 0; i < cfg.endpoints.length; i++) {
+    const ep = cfg.endpoints[i];
     const marker = ep.name === cfg.current ? " ←" : "";
-    console.log("  " + ep.name + marker);
-    console.log("    " + ep.url);
+    console.log("  " + (i + 1) + ". " + ep.name + marker);
+    console.log("     " + ep.url);
   }
 }
 
@@ -217,7 +229,7 @@ function cmdUse(args: string[]): void {
     console.log("Usage: oc use <name>");
     return;
   }
-  const name = args[0];
+  const name = args.join(" ");
   const cfg = loadConfig();
   const ep = findEndpoint(cfg, name);
   if (!ep) {
@@ -240,31 +252,30 @@ function cmdDel(args: string[]): void {
     console.log("Usage: oc del <name>");
     return;
   }
-  const name = args[0];
+  const name = args.join(" ");
   const cfg = loadConfig();
-  let idx = -1;
-  for (let i = 0; i < cfg.endpoints.length; i++) {
-    if (cfg.endpoints[i].name === name) { idx = i; break; }
-  }
-  if (idx === -1) {
+  const ep = findEndpoint(cfg, name);
+  if (!ep) {
     console.log('Endpoint "' + name + '" not found.');
     return;
   }
+  const idx = cfg.endpoints.indexOf(ep);
   cfg.endpoints.splice(idx, 1);
-  if (cfg.current === name) {
+  if (cfg.current === ep.name) {
     cfg.current = null;
   }
   saveConfig(cfg);
-  console.log("✓ Deleted: " + name);
+  console.log("✓ Deleted: " + ep.name);
 }
 
 function cmdTest(args: string[]): void {
   const cfg = loadConfig();
   let endpoints: Endpoint[] = cfg.endpoints;
   if (args.length > 0) {
-    const ep = findEndpoint(cfg, args[0]);
+    const name = args.join(" ");
+    const ep = findEndpoint(cfg, name);
     if (!ep) {
-      console.log('Endpoint "' + args[0] + '" not found.');
+      console.log('Endpoint "' + name + '" not found.');
       return;
     }
     endpoints = [ep];
