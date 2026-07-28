@@ -14,47 +14,45 @@ opencode.ai is behind Cloudflare. If you proxy requests from Cloudflare Workers,
 | **Supabase** | 500K/month | AWS | No | ✅ Deployed |
 | **Vercel** | 1M/month | AWS | No | ⏳ Import repo at vercel.com |
 | **Deno Deploy** | 1M/month | Google | No | ⏳ Link repo at console.deno.com |
-| **Fermyon Cloud** | 100K/month, 500 req/hr | Akamai | No | ⏳ `cd fermyon && npm i && spin deploy` |
-| **Render** | 750 hrs/month | AWS | No | ⏳ render.com -> Blueprint -> import repo |
+| **Fermyon Cloud** | 100K/month, 500 req/hr | Akamai | No | ✅ Deployed (Rust) |
+| **Render** | 750 hrs/month | AWS | Yes (even free) | ❌ Blocked |
 | **scriptc** | ∞ (needs VPS) | VPS IP | VPS dependent | 📦 Backup: compile to native binary |
 
 ## Quick Deploy
 
 ### Val Town (fastest)
-1. Go to [val.town](https://val.town) → New Val → HTTP
+1. Go to [val.town](https://val.town) -> New Val -> HTTP
 2. Paste contents of `valtown/proxy.ts`
 3. Your endpoint: `https://<username>-<val-id>.web.val.run/zen/v1`
 
 ### Supabase
-1. Go to [supabase.com](https://supabase.com) → New Project
-2. Edge Functions → Deploy → paste `supabase/functions/proxy/index.ts`
+1. Go to [supabase.com](https://supabase.com) -> New Project
+2. Edge Functions -> Deploy -> paste `supabase/functions/proxy/index.ts`
 3. Your endpoint: `https://<project-ref>.supabase.co/functions/v1/proxy/zen/v1`
 
 ### Vercel
-1. Go to [vercel.com](https://vercel.com) → Import `3kaiu/opencode-proxy`
+1. Go to [vercel.com](https://vercel.com) -> Import `3kaiu/opencode-proxy`
 2. Auto-detected: Edge Function at `api/proxy.ts`
 3. Your endpoint: `https://<project>.vercel.app/zen/v1`
 
 ### Deno Deploy
-1. Go to [console.deno.com](https://console.deno.com) → New Project → Link `3kaiu/opencode-proxy`
+1. Go to [console.deno.com](https://console.deno.com) -> New Project -> Link `3kaiu/opencode-proxy`
 2. Entrypoint: `deno/main.ts`
 3. Your endpoint: `https://<project>.deno.dev/zen/v1`
 
-### Fermyon Cloud
+### Fermyon Cloud (Rust, 245KB WASM)
 ```bash
-cd fermyon
-npm install
+cd fermyon-rust
 spin plugins install cloud  # one-time
-spin login                   # GitHub OAuth
-spin deploy
+spin cloud login --auth-method token --token <YOUR_TOKEN>
+spin cloud deploy
 ```
-Endpoint: `https://opencode-proxy-<hash>.fermyon.app/zen/v1`
+Endpoint: `https://YOUR-FERMYON-APP.fermyon.app/zen/v1`
+
+> JS version (`fermyon/`) produces 12MB WASM which fails to upload. Rust version is 245KB.
 
 ### Render
-1. Go to [render.com](https://render.com) → New → Blueprint
-2. Connect `3kaiu/opencode-proxy` repo
-3. Auto-detected from `render/render.yaml`
-4. Your endpoint: `https://opencode-proxy.onrender.com/zen/v1`
+> Render requires credit card even for free plan (both API and dashboard). Skipped.
 
 ### scriptc (native binary, needs VPS)
 ```bash
@@ -92,7 +90,7 @@ curl https://<your-proxy-endpoint>/zen/v1/chat/completions \
 ```
 shared/
   proxy.ts       # Core: handlePreflight + proxyToOpenCode
-  detection.ts   # Rate-limit detection (403/429 → trigger redeploy)
+  detection.ts   # Rate-limit detection (403/429 -> trigger redeploy)
   redeploy.ts    # Self-redeploy via deploy hooks
 
 api/proxy.ts           # Vercel Edge (standalone)
@@ -100,7 +98,8 @@ valtown/proxy.ts       # Val Town (standalone)
 supabase/.../index.ts  # Supabase Edge (standalone)
 deno/main.ts           # Deno Deploy (imports shared/)
 netlify/.../proxy.ts   # Netlify Edge (standalone)
-fermyon/src/index.ts   # Fermyon Spin WASM (standalone)
+fermyon-rust/src/lib.rs  # Fermyon Spin WASM (Rust, standalone)
+fermyon/src/index.ts   # Fermyon Spin WASM (JS, deprecated - 12MB)
 render/server.js       # Render Docker/Node.js (standalone)
 scriptc/proxy.ts       # scriptc native binary (standalone)
 ```
