@@ -8,3 +8,5 @@ target/
 
 # Lock files
 package-lock.json
+cli/oc
+cli/oc.ll
