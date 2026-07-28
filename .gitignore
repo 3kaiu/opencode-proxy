@@ -1,1 +1,10 @@
 supabase/.temp/
+
+# Build artifacts
+node_modules/
+dist/
+build/
+target/
+
+# Lock files
+package-lock.json
