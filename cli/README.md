@@ -4,17 +4,26 @@
 
 ## 安装
 
-```bash
-# 编译
-scriptc build cli/oc.ts -o cli/oc
+### 方式一：直接下载预编译二进制（推荐）
 
-# 安装到 PATH
-cp cli/oc ~/bin/oc
+GitHub Actions 会自动编译，直接下载即可：
+
+```bash
+# macOS arm64
+curl -L https://github.com/3kaiu/opencode-proxy/releases/latest/download/oc-darwin-arm64 -o ~/bin/oc && chmod +x ~/bin/oc
 
 # 加到 PATH（选你用的 shell）
 # fish:  fish_add_path ~/bin             >> ~/.config/fish/config.fish
 # zsh:   export PATH="$HOME/bin:$PATH"   >> ~/.zshrc
 # bash:  export PATH="$HOME/bin:$PATH"   >> ~/.bashrc
+```
+
+### 方式二：本地编译
+
+```bash
+npm install -g scriptc
+scriptc build cli/oc.ts -o cli/oc
+cp cli/oc ~/bin/oc
 ```
 
 ## 卸载

@@ -1,0 +1,41 @@
+name: Build oc CLI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cli/oc.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install scriptc
+        run: npm install -g scriptc
+
+      - name: Build
+        run: scriptc build cli/oc.ts -o oc-darwin-arm64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oc-darwin-arm64
+          path: oc-darwin-arm64
+
+      - name: Update latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: oc (latest)
+          prerelease: true
+          files: oc-darwin-arm64
