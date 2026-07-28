@@ -37,5 +37,5 @@ jobs:
         with:
           tag_name: latest
           name: oc (latest)
-          prerelease: true
+          make_latest: true
           files: oc-darwin-arm64
