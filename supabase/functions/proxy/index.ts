@@ -1,6 +1,7 @@
 // opencode-proxy - Supabase Edge Function adapter
 // Deploy: supabase functions deploy proxy --no-verify-jwt
 // Free tier: 500K invocations/month, no CC, Deno-based.
+// Note: Supabase strips /functions/v1 prefix, so pathname starts with /proxy/...
 
 const TARGET_HOST = "https://opencode.ai"
 const REQUEST_TIMEOUT_MS = 60_000
@@ -40,9 +41,10 @@ Deno.serve(async (req: Request) => {
   }
 
   const url = new URL(req.url)
-  // Supabase functions are mounted at /functions/v1/proxy, so strip the prefix
-  const proxyPath = url.pathname.replace(/^\/functions\/v1\/proxy/, "")
-  if (proxyPath === "/health" || proxyPath === "") {
+  // Supabase strips /functions/v1, so pathname is like /proxy/zen/v1/models
+  // Strip the /proxy prefix to get the target path
+  let proxyPath = url.pathname.replace(/^\/proxy/, "")
+  if (proxyPath === "" || proxyPath === "/") {
     return new Response(JSON.stringify({ status: "ok", platform: "supabase" }), {
       headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
     })
