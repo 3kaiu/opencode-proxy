@@ -1,0 +1,4 @@
+project_id = "opencode-proxy"
+
+[functions.proxy]
+verify_jwt = false
