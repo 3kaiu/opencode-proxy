@@ -1,0 +1,11 @@
+{
+  "tasks": {
+    "dev": "deno run --allow-net deno/main.ts",
+    "start": "deno run --allow-net --allow-env deno/main.ts"
+  },
+  "deploy": {
+    "entrypoint": "deno/main.ts",
+    "include": ["deno/", "shared/"]
+  },
+  "imports": {}
+}
