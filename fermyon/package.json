@@ -1,0 +1,17 @@
+{
+  "name": "opencode-proxy-fermyon",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "webpack && j2w -o dist/proxy.wasm dist/proxy.js",
+    "dev": "spin build --up"
+  },
+  "devDependencies": {
+    "@spinframework/build-tools": "^0.1.0",
+    "itty-router": "^5.0.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.7.0",
+    "webpack": "^5.97.0",
+    "webpack-cli": "^6.0.0"
+  }
+}

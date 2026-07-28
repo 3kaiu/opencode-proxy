@@ -1,0 +1,17 @@
+# Render Blueprint - opencode-proxy
+# Deploy at render.com -> New -> Blueprint -> connect 3kaiu/opencode-proxy repo
+# Free tier: 750 instance hours/month, no credit card needed
+# Exit IP: AWS (non-Cloudflare) ✅
+
+services:
+  - type: web
+    name: opencode-proxy
+    runtime: docker
+    dockerfilePath: ./render/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production

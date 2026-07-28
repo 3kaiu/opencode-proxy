@@ -1,0 +1,20 @@
+spin_manifest_version = 2
+
+[application]
+name = "opencode-proxy"
+version = "1.0.0"
+description = "HTTP proxy to opencode.ai/zen/v1 - Fermyon Cloud adapter"
+authors = ["3kaiu"]
+
+[[trigger.http]]
+route = "/..."
+component = "opencode-proxy"
+
+[component.opencode-proxy]
+source = "dist/proxy.wasm"
+exclude_files = ["**/node_modules"]
+allowed_outbound_hosts = ["https://opencode.ai"]
+
+[component.opencode-proxy.build]
+command = "npm run build"
+watch_files = ["src/**/*.ts", "package.json"]
