@@ -1,5 +1,21 @@
 // oc.ts - opencode proxy switcher CLI
-// Build: scriptc build oc.ts -o oc
+// Build: scriptc build cli/oc.ts -o cli/oc
+//
+// Provider name injected into both Kimi Code and OpenCode: "oc"
+//
+// Install:
+//   scriptc build cli/oc.ts -o cli/oc
+//   cp cli/oc ~/bin/oc
+//   # Add ~/bin to PATH (fish):
+//   #   fish_add_path ~/bin        >> ~/.config/fish/config.fish
+//   # Add ~/bin to PATH (zsh):
+//   #   export PATH="$HOME/bin:$PATH"  >> ~/.zshrc
+//   # Add ~/bin to PATH (bash):
+//   #   export PATH="$HOME/bin:$PATH"  >> ~/.bashrc
+//
+// Uninstall:
+//   rm ~/bin/oc
+//   rm -rf ~/.oc
 //
 // Usage:
 //   oc                    Show current endpoint
@@ -8,8 +24,13 @@
 //   oc use <name>         Switch to an endpoint
 //   oc del <name>         Delete an endpoint
 //   oc test [name]        Test endpoint(s) latency
-//   oc import <file>      Import from endpoints.txt (name|url per line)
-//   oc help               Show help
+//   oc import <file>      Import from file (name|url per line)
+//   oc current            Show current endpoint
+//   oc help               Show this help
+//
+// Config:  ~/.oc/config.json
+// Kimi:    ~/.kimi-code/config.toml        [providers.oc] base_url
+// OpenCode: ~/.config/opencode/opencode.json  provider.oc.baseURL
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -317,10 +338,24 @@ function printHelp(): void {
   console.log("  oc use <name>         Switch to an endpoint");
   console.log("  oc del <name>         Delete an endpoint");
   console.log("  oc test [name]        Test endpoint(s) latency");
-  console.log("  oc import <file>      Import from endpoints.txt");
+  console.log("  oc import <file>      Import from file (name|url per line)");
+  console.log("  oc current            Show current endpoint");
   console.log("  oc help               Show this help");
   console.log("");
-  console.log("Config: " + CONFIG_FILE);
+  console.log("Install:");
+  console.log("  scriptc build cli/oc.ts -o cli/oc");
+  console.log("  cp cli/oc ~/bin/oc");
+  console.log("  # fish:  fish_add_path ~/bin             >> ~/.config/fish/config.fish");
+  console.log("  # zsh:   export PATH=\"$HOME/bin:$PATH\"   >> ~/.zshrc");
+  console.log("  # bash:  export PATH=\"$HOME/bin:$PATH\"   >> ~/.bashrc");
+  console.log("");
+  console.log("Uninstall:");
+  console.log("  rm ~/bin/oc");
+  console.log("  rm -rf ~/.oc");
+  console.log("");
+  console.log("Config:  " + CONFIG_FILE);
+  console.log("Kimi:    ~/.kimi-code/config.toml         [providers.oc] base_url");
+  console.log("OpenCode: ~/.config/opencode/opencode.json  provider.oc.baseURL");
 }
 
 // ── Main ────────────────────────────────────────────────
