@@ -21,8 +21,8 @@ const CONFIG_DIR = HOME + "/.oc";
 const CONFIG_FILE = CONFIG_DIR + "/config.json";
 const KIMI_CONFIG = HOME + "/.kimi-code/config.toml";
 const OPENCODE_CONFIG = HOME + "/.config/opencode/opencode.json";
-const KIMI_PROVIDER = "opencode";
-const OPENCODE_PROVIDER = "opencode-proxy";
+const KIMI_PROVIDER = "oc";
+const OPENCODE_PROVIDER = "oc";
 
 // ── Types ───────────────────────────────────────────────
 interface Endpoint {
