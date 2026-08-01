@@ -10,19 +10,27 @@ const CORS_HEADERS = {
   "Access-Control-Max-Age": "86400",
 }
 
+// 只代理 API 路径，拒绝官网静态资源，避免烧 Edge Function 调用量
+const API_PREFIXES = ["/zen/", "/v1/"]
+
+function isApiPath(pathname) {
+  return API_PREFIXES.some((p) => pathname.startsWith(p))
+}
+
 function healthResponse() {
   return new Response(
-    JSON.stringify({ status: "ok", version: "1.0.0" }),
+    JSON.stringify({ status: "ok", version: "1.3.0", platform: "vercel" }),
     { headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
   )
 }
 
 const USER_AGENTS = [
-  "opencode/latest/1.3.15/cli",
-  "opencode/latest/1.3.16/cli",
-  "opencode/latest/1.3.17/cli",
-  "opencode/latest/1.4.0/cli",
-  "opencode/latest/1.4.1/cli",
+  "opencode/latest/0.0.50/cli",
+  "opencode/latest/0.0.51/cli",
+  "opencode/latest/0.0.52/cli",
+  "opencode/latest/0.0.53/cli",
+  "opencode/latest/0.0.54/cli",
+  "opencode/latest/0.0.55/cli",
 ]
 
 const randomUserAgent = () => USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]
@@ -49,6 +57,14 @@ function handlePreflight(request) {
 async function proxyToOpenCode(request) {
   const url = new URL(request.url)
   if (url.pathname === "/health") return healthResponse()
+
+  // 非 API 路径直接 404，不转发到上游
+  if (!isApiPath(url.pathname)) {
+    return new Response(JSON.stringify({ error: "Not found" }), {
+      status: 404,
+      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+    })
+  }
 
   const target = TARGET_HOST + url.pathname + url.search
 

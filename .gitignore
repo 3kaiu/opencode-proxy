@@ -11,3 +11,8 @@ package-lock.json
 cli/oc
 cli/oc.ll
 endpoints.txt
+
+# Cloudflare Workers local state / secrets
+cloudflare/.dev.vars
+cloudflare/.wrangler/
+.vercel

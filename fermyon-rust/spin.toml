@@ -2,7 +2,7 @@ spin_manifest_version = 2
 
 [application]
 name = "opencode-proxy"
-version = "1.0.0"
+version = "1.3.0"
 description = "HTTP proxy to opencode.ai/zen/v1 - Fermyon Cloud (Rust)"
 authors = ["3kaiu"]
 

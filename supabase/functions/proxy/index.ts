@@ -13,12 +13,20 @@ const CORS_HEADERS = {
   "Access-Control-Max-Age": "86400",
 }
 
+// 只代理 API 路径，拒绝官网静态资源，避免烧 Edge Function 调用量
+const API_PREFIXES = ["/zen/", "/v1/"]
+
+function isApiPath(pathname: string): boolean {
+  return API_PREFIXES.some((p) => pathname.startsWith(p))
+}
+
 const USER_AGENTS = [
-  "opencode/latest/1.3.15/cli",
-  "opencode/latest/1.3.16/cli",
-  "opencode/latest/1.3.17/cli",
-  "opencode/latest/1.4.0/cli",
-  "opencode/latest/1.4.1/cli",
+  "opencode/latest/0.0.50/cli",
+  "opencode/latest/0.0.51/cli",
+  "opencode/latest/0.0.52/cli",
+  "opencode/latest/0.0.53/cli",
+  "opencode/latest/0.0.54/cli",
+  "opencode/latest/0.0.55/cli",
 ]
 
 const randomUserAgent = () => USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]
@@ -44,8 +52,17 @@ Deno.serve(async (req: Request) => {
   // Supabase strips /functions/v1, so pathname is like /proxy/zen/v1/models
   // Strip the /proxy prefix to get the target path
   let proxyPath = url.pathname.replace(/^\/proxy/, "")
-  if (proxyPath === "" || proxyPath === "/") {
-    return new Response(JSON.stringify({ status: "ok", platform: "supabase" }), {
+  if (proxyPath === "" || proxyPath === "/" || proxyPath === "/health") {
+    return new Response(
+      JSON.stringify({ status: "ok", version: "1.3.0", platform: "supabase" }),
+      { headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
+    )
+  }
+
+  // 非 API 路径直接 404，不转发到上游
+  if (!isApiPath(proxyPath)) {
+    return new Response(JSON.stringify({ error: "Not found" }), {
+      status: 404,
       headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
     })
   }

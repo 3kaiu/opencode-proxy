@@ -8,6 +8,7 @@ const https = require("https");
 
 const TARGET_HOST = "opencode.ai";
 const LISTEN_PORT = process.env.PORT || 7860;
+const REQUEST_TIMEOUT_MS = 60_000;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -16,12 +17,20 @@ const CORS_HEADERS = {
   "Access-Control-Max-Age": "86400",
 };
 
+// 只代理 API 路径，拒绝官网静态资源，避免烧调用量
+const API_PREFIXES = ["/zen/", "/v1/"];
+
+function isApiPath(pathname) {
+  return API_PREFIXES.some((p) => pathname.startsWith(p));
+}
+
 const USER_AGENTS = [
-  "opencode/latest/1.3.15/cli",
-  "opencode/latest/1.3.16/cli",
-  "opencode/latest/1.3.17/cli",
-  "opencode/latest/1.4.0/cli",
-  "opencode/latest/1.4.1/cli",
+  "opencode/latest/0.0.50/cli",
+  "opencode/latest/0.0.51/cli",
+  "opencode/latest/0.0.52/cli",
+  "opencode/latest/0.0.53/cli",
+  "opencode/latest/0.0.54/cli",
+  "opencode/latest/0.0.55/cli",
 ];
 
 function randomUserAgent() {
@@ -50,7 +59,14 @@ const server = http.createServer((req, res) => {
   // 健康检查
   if (url.pathname === "/health") {
     res.writeHead(200, { ...CORS_HEADERS, "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", platform: "render" }));
+    res.end(JSON.stringify({ status: "ok", version: "1.3.0", platform: "render" }));
+    return;
+  }
+
+  // 非 API 路径直接 404，不转发到上游
+  if (!isApiPath(url.pathname)) {
+    res.writeHead(404, { ...CORS_HEADERS, "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not found" }));
     return;
   }
 
@@ -74,16 +90,20 @@ const server = http.createServer((req, res) => {
       path: url.pathname + url.search,
       method: req.method,
       headers: forwardHeaders,
+      timeout: REQUEST_TIMEOUT_MS,
     },
     (proxyRes) => {
       const statusCode = proxyRes.statusCode || 502;
-      // 复制上游 headers + CORS
       const responseHeaders = { ...proxyRes.headers, ...CORS_HEADERS };
       res.writeHead(statusCode, responseHeaders);
       // 流式转发响应体（支持 SSE）
       proxyRes.pipe(res);
     },
   );
+
+  proxyReq.on("timeout", () => {
+    proxyReq.destroy(new Error("upstream timeout"));
+  });
 
   proxyReq.on("error", (err) => {
     console.error("[proxy] Error:", err.message);

@@ -4,5 +4,5 @@ Deno.serve(async (req) => {
   const preflight = handlePreflight(req)
   if (preflight) return preflight
 
-  return await proxyToOpenCode(req)
+  return await proxyToOpenCode(req, "deno")
 })

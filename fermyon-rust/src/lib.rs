@@ -4,15 +4,24 @@ use spin_sdk::http_component;
 const TARGET_HOST: &str = "https://opencode.ai";
 
 const USER_AGENTS: &[&str] = &[
-    "opencode/latest/1.3.15/cli",
-    "opencode/latest/1.3.16/cli",
-    "opencode/latest/1.3.17/cli",
-    "opencode/latest/1.4.0/cli",
-    "opencode/latest/1.4.1/cli",
+    "opencode/latest/0.0.50/cli",
+    "opencode/latest/0.0.51/cli",
+    "opencode/latest/0.0.52/cli",
+    "opencode/latest/0.0.53/cli",
+    "opencode/latest/0.0.54/cli",
+    "opencode/latest/0.0.55/cli",
 ];
 
+/// 只代理 API 路径，拒绝官网静态资源，避免烧调用量
+fn is_api_path(path: &str) -> bool {
+    path.starts_with("/zen/") || path.starts_with("/v1/")
+}
+
+// WASM 环境无 crypto.getRandomValues()，spin-sdk v5 不暴露随机 API。
+// 用 AtomicU64 round-robin / LCG 代替。X-Random-ID 仅为辅助链路多样性，
+// Fermyon 是 10 个端点中额度最小的（10 万次/月），确定性序列的实际风险极低。
+// 若需真随机可引入 getrandom crate（wasm32-wasip1 target）。
 fn random_user_agent() -> &'static str {
-    // Use a pseudo-random index based on a simple counter
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let idx = (COUNTER.fetch_add(1, Ordering::Relaxed) as usize) % USER_AGENTS.len();
@@ -52,9 +61,10 @@ async fn handle_request(req: Request) -> Response {
     }
 
     if req.method() != &Method::Get && req.method() != &Method::Post {
+        let mut h = cors_headers();
+        h.push(("Content-Type".into(), "application/json".into()));
         return ResponseBuilder::new(405)
-            .header("Content-Type", "application/json")
-            .header("Access-Control-Allow-Origin", "*")
+            .headers(h)
             .body(br#"{"error":"Only GET and POST allowed"}"#.to_vec())
             .build();
     }
@@ -70,15 +80,32 @@ async fn handle_request(req: Request) -> Response {
                 None => "/",
             }
         }
-        None => &uri[..], // fallback: assume it's already just a path
+        None => &uri[..],
+    };
+
+    // Extract pathname (without query) for path checks
+    let pathname = match path_and_query.find('?') {
+        Some(q) => &path_and_query[..q],
+        None => path_and_query,
     };
 
     // Health check
-    if path_and_query == "/health" || path_and_query == "/health/" {
+    if pathname == "/health" || pathname == "/health/" {
+        let mut h = cors_headers();
+        h.push(("Content-Type".into(), "application/json".into()));
         return ResponseBuilder::new(200)
-            .header("Content-Type", "application/json")
-            .header("Access-Control-Allow-Origin", "*")
-            .body(br#"{"status":"ok","platform":"fermyon"}"#.to_vec())
+            .headers(h)
+            .body(br#"{"status":"ok","version":"1.3.0","platform":"fermyon"}"#.to_vec())
+            .build();
+    }
+
+    // 非 API 路径直接 404，不转发到上游
+    if !is_api_path(pathname) {
+        let mut h = cors_headers();
+        h.push(("Content-Type".into(), "application/json".into()));
+        return ResponseBuilder::new(404)
+            .headers(h)
+            .body(br#"{"error":"Not found"}"#.to_vec())
             .build();
     }
 
@@ -132,9 +159,10 @@ async fn handle_request(req: Request) -> Response {
         }
         Err(e) => {
             let body = format!(r#"{{"error":"proxy failed: {}"}}"#, e);
+            let mut h = cors_headers();
+            h.push(("Content-Type".into(), "application/json".into()));
             ResponseBuilder::new(502)
-                .header("Content-Type", "application/json")
-                .header("Access-Control-Allow-Origin", "*")
+                .headers(h)
                 .body(body.into_bytes())
                 .build()
         }

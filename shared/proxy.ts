@@ -8,23 +8,35 @@ const CORS_HEADERS = {
   "Access-Control-Max-Age": "86400",
 }
 
-// 健康检查响应（惰性创建，避免 CF Workers 全局作用域限制）
-function healthResponse(): Response {
+// 只代理 API 路径，拒绝官网静态资源（字体/CSS/JS/图片），避免烧 Edge Function 调用量
+const API_PREFIXES = ["/zen/", "/v1/"]
+
+export function isApiPath(pathname: string): boolean {
+  return API_PREFIXES.some((p) => pathname.startsWith(p))
+}
+
+function notFoundResponse(): Response {
+  return new Response(JSON.stringify({ error: "Not found" }), {
+    status: 404,
+    headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+  })
+}
+
+function healthResponse(platform: string): Response {
   return new Response(
-    JSON.stringify({ status: "ok", version: "1.0.0" }),
-    {
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-    },
+    JSON.stringify({ status: "ok", version: "1.3.0", platform }),
+    { headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
   )
 }
 
 // 随机 User-Agent 池 — 模拟不同客户端指纹，增加链路多样性
 const USER_AGENTS = [
-  "opencode/latest/1.3.15/cli",
-  "opencode/latest/1.3.16/cli",
-  "opencode/latest/1.3.17/cli",
-  "opencode/latest/1.4.0/cli",
-  "opencode/latest/1.4.1/cli",
+  "opencode/latest/0.0.50/cli",
+  "opencode/latest/0.0.51/cli",
+  "opencode/latest/0.0.52/cli",
+  "opencode/latest/0.0.53/cli",
+  "opencode/latest/0.0.54/cli",
+  "opencode/latest/0.0.55/cli",
 ]
 
 const randomUserAgent = () => USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]
@@ -49,11 +61,13 @@ export function handlePreflight(request: Request): Response | null {
   return null
 }
 
-export async function proxyToOpenCode(request: Request): Promise<Response> {
+export async function proxyToOpenCode(request: Request, platform = "shared"): Promise<Response> {
   const url = new URL(request.url)
 
-  // 健康检查
-  if (url.pathname === "/health") return healthResponse()
+  if (url.pathname === "/health") return healthResponse(platform)
+
+  // 非 API 路径直接 404，不转发到上游
+  if (!isApiPath(url.pathname)) return notFoundResponse()
 
   const target = TARGET_HOST + url.pathname + url.search
 
@@ -71,11 +85,9 @@ export async function proxyToOpenCode(request: Request): Promise<Response> {
   }
   forwardHeaders.set("User-Agent", randomUserAgent())
   forwardHeaders.set("X-Random-ID", randomHex(8))
-  // 透传客户端 Content-Type，若无则默认
   const clientContentType = request.headers.get("Content-Type")
   forwardHeaders.set("Content-Type", clientContentType || "application/json")
 
-  // 带超时的 fetch，直接返回原始 Response 以支持流式 SSE 透传
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
