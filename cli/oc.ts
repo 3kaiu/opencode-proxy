@@ -34,7 +34,6 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { execSync } from "node:child_process";
 
 // ── Paths ───────────────────────────────────────────────
 const HOME = homedir();
@@ -54,6 +53,12 @@ interface Endpoint {
 interface OcConfig {
   endpoints: Endpoint[];
   current: string | null;
+}
+
+interface TestResult {
+  name: string;
+  status: number;
+  ms: number;
 }
 
 // ── Config I/O ──────────────────────────────────────────
@@ -131,49 +136,34 @@ function updateOpenCode(url: string): void {
     console.log("  ⚠ OpenCode opencode.json not found");
     return;
   }
-  const raw = readFileSync(OPENCODE_CONFIG, "utf8");
-
-  // Find the provider key, then the baseURL within its block
-  const key = '"' + OPENCODE_PROVIDER + '"';
-  let pos = 0;
-  while (true) {
-    const idx = raw.indexOf(key, pos);
-    if (idx === -1) {
-      console.log('  ⚠ Provider "' + OPENCODE_PROVIDER + '" not found in opencode.json');
-      return;
-    }
-    // Verify it's a JSON key (followed by optional whitespace then :)
-    let after = idx + key.length;
-    while (after < raw.length && (raw[after] === " " || raw[after] === "\t" || raw[after] === "\n")) {
-      after++;
-    }
-    if (raw[after] === ":") {
-      // Found the right key. Now find "baseURL" after it.
-      const bKey = '"baseURL"';
-      const bIdx = raw.indexOf(bKey, after);
-      if (bIdx === -1) {
-        console.log('  ⚠ baseURL not found in provider "' + OPENCODE_PROVIDER + '"');
-        return;
-      }
-      // Find the value: skip past colon to the opening quote
-      const colonIdx = raw.indexOf(":", bIdx);
-      let qStart = colonIdx + 1;
-      while (qStart < raw.length && raw[qStart] !== '"') {
-        qStart++;
-      }
-      const qEnd = raw.indexOf('"', qStart + 1);
-      if (qStart === -1 || qEnd === -1) {
-        console.log("  ⚠ Malformed baseURL value");
-        return;
-      }
-      // Replace just the URL value between quotes
-      const updated = raw.slice(0, qStart + 1) + url + raw.slice(qEnd);
-      writeFileSync(OPENCODE_CONFIG, updated);
-      console.log("  ✓ OpenCode  -> provider." + OPENCODE_PROVIDER);
-      return;
-    }
-    pos = idx + 1;
+  let json: Record<string, unknown>;
+  try {
+    json = JSON.parse(readFileSync(OPENCODE_CONFIG, "utf8")) as Record<string, unknown>;
+  } catch {
+    console.log("  ⚠ opencode.json is not valid JSON");
+    return;
   }
+
+  const providers = json.provider as Record<string, Record<string, unknown>> | undefined;
+  const provider = providers?.[OPENCODE_PROVIDER];
+  if (!provider) {
+    console.log(`  ⚠ Provider "${OPENCODE_PROVIDER}" not found in opencode.json`);
+    return;
+  }
+
+  // baseURL may live at provider.options.baseURL or provider.baseURL
+  const options = provider.options as Record<string, unknown> | undefined;
+  if (options && typeof options.baseURL === "string") {
+    options.baseURL = url;
+  } else if (typeof provider.baseURL === "string") {
+    provider.baseURL = url;
+  } else {
+    console.log(`  ⚠ baseURL not found in provider "${OPENCODE_PROVIDER}"`);
+    return;
+  }
+
+  writeFileSync(OPENCODE_CONFIG, JSON.stringify(json, null, 2) + "\n");
+  console.log("  ✓ OpenCode  -> provider." + OPENCODE_PROVIDER);
 }
 
 // ── Commands ────────────────────────────────────────────
@@ -186,7 +176,7 @@ function cmdCurrent(): void {
   }
   const ep = findEndpoint(cfg, cfg.current);
   if (!ep) {
-    console.log('Current endpoint "' + cfg.current + '" not found in list.');
+    console.log(`Current endpoint "${cfg.current}" not found in list.`);
     return;
   }
   console.log("Current: " + ep.name);
@@ -202,7 +192,7 @@ function cmdList(): void {
   for (let i = 0; i < cfg.endpoints.length; i++) {
     const ep = cfg.endpoints[i];
     const marker = ep.name === cfg.current ? " ←" : "";
-    console.log("  " + (i + 1) + ". " + ep.name + marker);
+    console.log(`  ${i + 1}. ${ep.name}${marker}`);
     console.log("     " + ep.url);
   }
 }
@@ -216,7 +206,7 @@ function cmdAdd(args: string[]): void {
   const url = args[1];
   const cfg = loadConfig();
   if (findEndpoint(cfg, name)) {
-    console.log('Endpoint "' + name + '" already exists.');
+    console.log(`Endpoint "${name}" already exists.`);
     return;
   }
   cfg.endpoints.push({ name, url });
@@ -233,7 +223,8 @@ function cmdUse(args: string[]): void {
   const cfg = loadConfig();
   const ep = findEndpoint(cfg, name);
   if (!ep) {
-    console.log('Endpoint "' + name + '" not found. Run "oc list" to see options.');
+    console.log(`Endpoint "${name}" not found. Run "oc list" to see options.`);
+    process.exitCode = 1;
     return;
   }
   console.log("Switching to: " + ep.name);
@@ -241,7 +232,7 @@ function cmdUse(args: string[]): void {
   console.log("");
   updateKimi(ep.url);
   updateOpenCode(ep.url);
-  cfg.current = name;
+  cfg.current = ep.name;
   saveConfig(cfg);
   console.log("");
   console.log("✓ Done.");
@@ -256,7 +247,8 @@ function cmdDel(args: string[]): void {
   const cfg = loadConfig();
   const ep = findEndpoint(cfg, name);
   if (!ep) {
-    console.log('Endpoint "' + name + '" not found.');
+    console.log(`Endpoint "${name}" not found.`);
+    process.exitCode = 1;
     return;
   }
   const idx = cfg.endpoints.indexOf(ep);
@@ -268,14 +260,15 @@ function cmdDel(args: string[]): void {
   console.log("✓ Deleted: " + ep.name);
 }
 
-function cmdTest(args: string[]): void {
+async function cmdTest(args: string[]): Promise<void> {
   const cfg = loadConfig();
   let endpoints: Endpoint[] = cfg.endpoints;
   if (args.length > 0) {
     const name = args.join(" ");
     const ep = findEndpoint(cfg, name);
     if (!ep) {
-      console.log('Endpoint "' + name + '" not found.');
+      console.log(`Endpoint "${name}" not found.`);
+      process.exitCode = 1;
       return;
     }
     endpoints = [ep];
@@ -284,26 +277,31 @@ function cmdTest(args: string[]): void {
     console.log("No endpoints to test.");
     return;
   }
-  console.log("Testing endpoints (curl /models, 5s timeout)...\n");
-  for (const ep of endpoints) {
-    const label = ep.name;
-    const pad = label.length < 12 ? 12 - label.length : 0;
-    let padding = "";
-    for (let p = 0; p < pad; p++) { padding += " "; }
-    process.stdout.write("  " + label + padding + " ");
-    try {
-      const out = execSync(
-        "curl -s -o /dev/null -w '%{http_code} %{time_total}' --max-time 5 " + ep.url + "/models",
-        { timeout: 10000 }
-      ).toString().trim();
-      const parts = out.split(" ");
-      const code = parts[0];
-      const time = parts.length > 1 ? parts[1] : "?";
-      const ok = code === "200";
-      const sym = ok ? "✓" : "✗";
-      console.log(sym + " " + code + "  " + (parseFloat(time) * 1000).toFixed(0) + "ms");
-    } catch {
-      console.log("✗ ERR");
+  console.log("Testing endpoints (/models, 5s timeout)...\n");
+
+  // scriptc native fetch — no curl dependency, parallel probing
+  const results = await Promise.all(
+    endpoints.map(async (ep): Promise<TestResult> => {
+      const base = ep.url.replace(/\/+$/, "");
+      const start = Date.now();
+      try {
+        const res = await fetch(base + "/models", {
+          signal: AbortSignal.timeout(5000),
+        });
+        return { name: ep.name, status: res.status, ms: Date.now() - start };
+      } catch {
+        return { name: ep.name, status: 0, ms: Date.now() - start };
+      }
+    }),
+  );
+
+  for (const r of results) {
+    const label = r.name.padEnd(14);
+    if (r.status === 0) {
+      console.log(`  ${label} ✗ ERR`);
+    } else {
+      const sym = r.status === 200 ? "✓" : "✗";
+      console.log(`  ${label} ${sym} ${r.status}  ${r.ms}ms`);
     }
   }
 }
@@ -316,6 +314,7 @@ function cmdImport(args: string[]): void {
   const file = args[0];
   if (!existsSync(file)) {
     console.log("File not found: " + file);
+    process.exitCode = 1;
     return;
   }
   const content = readFileSync(file, "utf8");
@@ -336,7 +335,7 @@ function cmdImport(args: string[]): void {
     }
   }
   saveConfig(cfg);
-  console.log("✓ Imported " + added + " endpoints (" + cfg.endpoints.length + " total)");
+  console.log(`✓ Imported ${added} endpoints (${cfg.endpoints.length} total)`);
 }
 
 function printHelp(): void {
@@ -356,9 +355,9 @@ function printHelp(): void {
   console.log("Install:");
   console.log("  scriptc build cli/oc.ts -o cli/oc");
   console.log("  cp cli/oc ~/bin/oc");
-  console.log("  # fish:  fish_add_path ~/bin             >> ~/.config/fish/config.fish");
-  console.log("  # zsh:   export PATH=\"$HOME/bin:$PATH\"   >> ~/.zshrc");
-  console.log("  # bash:  export PATH=\"$HOME/bin:$PATH\"   >> ~/.bashrc");
+  console.log('  # fish:  fish_add_path ~/bin             >> ~/.config/fish/config.fish');
+  console.log('  # zsh:   export PATH="$HOME/bin:$PATH"   >> ~/.zshrc');
+  console.log('  # bash:  export PATH="$HOME/bin:$PATH"   >> ~/.bashrc');
   console.log("");
   console.log("Uninstall:");
   console.log("  rm ~/bin/oc");
@@ -370,7 +369,7 @@ function printHelp(): void {
 }
 
 // ── Main ────────────────────────────────────────────────
-function main(): void {
+async function main(): Promise<void> {
   const argv = process.argv;
   const cmd = argv.length > 2 ? argv[2] : "current";
   const args = argv.slice(3);
@@ -380,7 +379,7 @@ function main(): void {
     case "add":     cmdAdd(args); break;
     case "use":     cmdUse(args); break;
     case "del":     cmdDel(args); break;
-    case "test":    cmdTest(args); break;
+    case "test":    await cmdTest(args); break;
     case "import":  cmdImport(args); break;
     case "current": cmdCurrent(); break;
     case "help":
@@ -388,9 +387,10 @@ function main(): void {
     case "-h":
       printHelp(); break;
     default:
-      console.log('Unknown command: ' + cmd);
+      console.log("Unknown command: " + cmd);
       console.log("");
       printHelp();
+      process.exitCode = 1;
       break;
   }
 }

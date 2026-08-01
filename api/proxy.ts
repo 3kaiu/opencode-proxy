@@ -1,5 +1,4 @@
 // opencode-proxy — Vercel Edge Function（单文件，无外部依赖）
-declare var process: { env: Record<string, string | undefined> }
 
 const TARGET_HOST = "https://opencode.ai"
 const REQUEST_TIMEOUT_MS = 60_000
@@ -83,48 +82,11 @@ async function proxyToOpenCode(request) {
   }
 }
 
-async function isFreeUsageExceeded(response) {
-  if (response.status !== 403 && response.status !== 429) return false
-  const text = await response.clone().text()
-  return (
-    text.includes("Free usage exceeded, subscribe to Go") ||
-    text.includes("FreeUsageLimitError") ||
-    text.includes("Rate limit exceeded")
-  )
-}
-
-async function triggerSelfRedeploy(hookUrl) {
-  if (!hookUrl) {
-    console.error("[redeploy] No deploy hook URL configured — skipping")
-    return
-  }
-  console.log("[redeploy] Free usage limit hit, triggering self redeploy...")
-  try {
-    const res = await fetch(hookUrl, { method: "POST" })
-    if (!res.ok) {
-      console.error(`[redeploy] Hook returned ${res.status}: ${await res.text()}`)
-    } else {
-      console.log("[redeploy] Redeploy triggered successfully")
-    }
-  } catch (err) {
-    console.error("[redeploy] Failed to trigger redeploy:", err)
-  }
-}
-
 export default async function handler(request) {
   const preflight = handlePreflight(request)
   if (preflight) return preflight
 
-  const response = await proxyToOpenCode(request)
-
-  if (await isFreeUsageExceeded(response)) {
-    const hookUrl = process.env.DEPLOY_HOOK_URL
-    if (hookUrl) {
-      triggerSelfRedeploy(hookUrl).catch(console.error)
-    }
-  }
-
-  return response
+  return await proxyToOpenCode(request)
 }
 
 export const config = { runtime: "edge" }
