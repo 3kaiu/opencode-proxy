@@ -16,3 +16,6 @@ endpoints.txt
 cloudflare/.dev.vars
 cloudflare/.wrangler/
 .vercel
+
+# Wrangler local state
+.wrangler/

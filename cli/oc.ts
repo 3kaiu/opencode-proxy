@@ -1,7 +1,7 @@
 // oc.ts - opencode proxy switcher CLI
 // Build: scriptc build cli/oc.ts -o cli/oc
 //
-// 端点列表存储在本地 ~/.oc/config.json
+// 端点列表存储在本地 ~/.oc/config.json（不存任何凭据）
 // oc use 切换时自动更新已安装的 agent（kimi-code / opencode）配置
 // 如果 agent 未安装则跳过，如果已安装但没有 oc 供应商段，自动创建
 //
@@ -11,6 +11,7 @@
 //   oc add NAME URL       Add an endpoint
 //   oc use NAME           Switch client configs to an endpoint
 //   oc del NAME           Delete an endpoint
+//   oc test [NAME]        Check endpoint reachability (all if NAME omitted)
 //   oc current            Show current endpoint
 //   oc completion fish    Generate fish shell completions
 //   oc help               Show this help
@@ -18,16 +19,17 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
 
-// ── Paths ───────────────────────────────────────────────
 const HOME = homedir();
-const CONFIG_DIR = HOME + "/.oc";
-const CONFIG_FILE = CONFIG_DIR + "/config.json";
+const CONFIG_FILE = HOME + "/.oc/config.json";
 const KIMI_CONFIG = HOME + "/.kimi-code/config.toml";
-const OPENCODE_CONFIG = HOME + "/.config/opencode/opencode.jsonc";
 const PROVIDER = "oc";
+const KIMI_SECTION = "[providers." + PROVIDER + "]";
+const KIMI_HEADER = KIMI_SECTION + '\ntype = "openai"\nbase_url = "';
 
 // ── Types ───────────────────────────────────────────────
+
 interface Endpoint {
   name: string;
   url: string;
@@ -38,51 +40,145 @@ interface OcConfig {
   endpoints: Endpoint[];
 }
 
-// ── Config I/O ──────────────────────────────────────────
-function loadConfig(): OcConfig {
-  if (!existsSync(CONFIG_FILE)) {
-    return { current: null, endpoints: [] };
+type JsonObject = Record<string, unknown>;
+
+// ── Helpers ─────────────────────────────────────────────
+
+const asObject = (value: unknown): JsonObject | null =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null;
+
+// Strip // and /* */ comments plus trailing commas so JSON.parse can read
+// opencode's jsonc configs. Strings pass through verbatim.
+function stripJsonc(text: string): string {
+  let out = "";
+  let inString = false;
+  let lineComment = false;
+  let blockComment = false;
+  let pendingComma = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const next = text[i + 1] ?? "";
+    if (lineComment) {
+      if (c === "\n") {
+        lineComment = false;
+        out += c;
+      }
+      continue;
+    }
+    if (blockComment) {
+      if (c === "*" && next === "/") {
+        blockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (inString) {
+      out += c;
+      if (c === "\\") {
+        out += next;
+        i++;
+      } else if (c === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      lineComment = true;
+      i++;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      blockComment = true;
+      i++;
+      continue;
+    }
+    if (c === ",") {
+      pendingComma = true;
+      continue;
+    }
+    if (c === " " || c === "\t" || c === "\n" || c === "\r") {
+      out += c;
+      continue;
+    }
+    if (pendingComma) {
+      if (c === "}" || c === "]") {
+        pendingComma = false;
+        out += c;
+        continue;
+      }
+      out += ",";
+      pendingComma = false;
+    }
+    if (c === '"') {
+      out += c;
+      inString = true;
+      continue;
+    }
+    out += c;
   }
+  return out;
+}
+
+function parseJsonc(text: string): JsonObject | null {
   try {
-    const raw = readFileSync(CONFIG_FILE, "utf8");
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed === "object" && parsed !== null) {
-      const obj = parsed as Record<string, unknown>;
-      const current = typeof obj.current === "string" ? obj.current : null;
-      const endpoints: Endpoint[] = [];
-      if (Array.isArray(obj.endpoints)) {
-        for (let i = 0; i < obj.endpoints.length; i++) {
-          const item = obj.endpoints[i];
-          if (typeof item === "object" && item !== null) {
-            const ep = item as Record<string, unknown>;
-            if (typeof ep.name === "string" && typeof ep.url === "string") {
-              endpoints.push({ name: ep.name, url: ep.url });
-            }
-          }
+    return asObject(JSON.parse(stripJsonc(text)));
+  } catch {
+    return null;
+  }
+}
+
+function cmdExists(cmd: string): boolean {
+  try {
+    return spawnSync("which", [cmd], { stdio: "ignore" }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end);
+}
+
+function log(ok: boolean, message: string): void {
+  console.log("  " + (ok ? "✓" : "-") + " " + message);
+}
+
+// ── Config I/O ──────────────────────────────────────────
+
+function loadConfig(): OcConfig {
+  try {
+    const root = parseJsonc(readFileSync(CONFIG_FILE, "utf8"));
+    const endpoints: Endpoint[] = [];
+    if (Array.isArray(root?.endpoints)) {
+      for (const item of root.endpoints) {
+        const ep = asObject(item);
+        if (ep && typeof ep.name === "string" && typeof ep.url === "string") {
+          endpoints.push({ name: ep.name, url: ep.url });
         }
       }
-      return { current, endpoints };
     }
-    return { current: null, endpoints: [] };
+    return { current: typeof root?.current === "string" ? root.current : null, endpoints };
   } catch {
     return { current: null, endpoints: [] };
   }
 }
 
 function saveConfig(cfg: OcConfig): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
-  }
+  mkdirSync(dirname(CONFIG_FILE), { recursive: true });
   writeFileSync(CONFIG_FILE, JSON.stringify({ current: cfg.current, endpoints: cfg.endpoints }, null, 2) + "\n");
 }
 
 function findEndpoint(endpoints: Endpoint[], name: string): Endpoint | null {
-  for (let i = 0; i < endpoints.length; i++) {
-    if (endpoints[i].name === name) return endpoints[i];
+  for (const ep of endpoints) {
+    if (ep.name === name) return ep;
   }
   const lower = name.toLowerCase();
-  for (let i = 0; i < endpoints.length; i++) {
-    if (endpoints[i].name.toLowerCase() === lower) return endpoints[i];
+  for (const ep of endpoints) {
+    if (ep.name.toLowerCase() === lower) return ep;
   }
   const idx = parseInt(name, 10);
   if (!isNaN(idx) && idx >= 1 && idx <= endpoints.length) {
@@ -91,171 +187,277 @@ function findEndpoint(endpoints: Endpoint[], name: string): Endpoint | null {
   return null;
 }
 
-// ── Agent detection ─────────────────────────────────────
-function commandExists(cmd: string): boolean {
-  try {
-    const res = spawnSync("which", [cmd], { stdio: "ignore" });
-    return res.status === 0;
-  } catch {
-    return false;
-  }
+// ── Update Kimi Code config.toml ────────────────────────
+
+function kimiInstalled(): boolean {
+  return (
+    existsSync(HOME + "/.kimi-code") ||
+    cmdExists("kimi") ||
+    cmdExists("kimi-code") ||
+    cmdExists("kimi-cli")
+  );
 }
 
-// ── Update Kimi Code config.toml ────────────────────────
 function updateKimi(url: string): void {
-  const header = "[providers." + PROVIDER + "]";
-
   if (!existsSync(KIMI_CONFIG)) {
-    // Only create if kimi-code is actually installed
-    const hasKimi =
-      existsSync(HOME + "/.kimi-code") ||
-      commandExists("kimi") ||
-      commandExists("kimi-code") ||
-      commandExists("kimi-cli");
-    if (!hasKimi) {
-      console.log("  - Kimi Code  -> skipped (not installed)");
+    if (!kimiInstalled()) {
+      log(false, "Kimi Code -> skipped (not installed)");
       return;
     }
-    // Create config with oc provider section
-    mkdirSync(HOME + "/.kimi-code", { recursive: true });
-    const content = header + "\ntype = \"openai\"\nbase_url = \"" + url + "\"\n";
-    writeFileSync(KIMI_CONFIG, content);
-    console.log("  ✓ Kimi Code  -> created [providers." + PROVIDER + "]");
+    mkdirSync(dirname(KIMI_CONFIG), { recursive: true });
+    writeFileSync(KIMI_CONFIG, KIMI_HEADER + url + '"\n');
+    log(true, "Kimi Code -> created [" + PROVIDER + "]");
     return;
   }
 
-  const content = readFileSync(KIMI_CONFIG, "utf8");
-  const lines = content.split("\n");
-  let inSec = false;
-  let foundBase = false;
-  let foundSection = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim() === header) { inSec = true; foundSection = true; continue; }
-    if (line.startsWith("[") && inSec) { inSec = false; break; }
-    if (inSec && /^base_url\s*=/.test(line)) {
-      lines[i] = 'base_url = "' + url + '"';
-      foundBase = true;
-      break;
-    }
+  const before = readFileSync(KIMI_CONFIG, "utf8");
+  const start = before.indexOf(KIMI_SECTION);
+  if (start === -1) {
+    writeFileSync(KIMI_CONFIG, before + "\n" + KIMI_HEADER + url + '"\n');
+    log(true, "Kimi Code -> created [" + PROVIDER + "]");
+    return;
   }
 
-  if (foundSection && foundBase) {
-    writeFileSync(KIMI_CONFIG, lines.join("\n"));
-    console.log("  ✓ Kimi Code  -> updated [providers." + PROVIDER + "]");
-  } else if (foundSection && !foundBase) {
-    // Section exists but no base_url — add it
-    const newLines: string[] = [];
-    for (let i = 0; i < lines.length; i++) {
-      newLines.push(lines[i]);
-      if (lines[i].trim() === header) {
-        newLines.push('base_url = "' + url + '"');
+  const nextSection = before.indexOf("\n[", start + KIMI_SECTION.length);
+  const rangeEnd = nextSection === -1 ? before.length : nextSection;
+  const section = before.slice(start, rangeEnd);
+  const next = setBaseUrl(section, url);
+  writeFileSync(KIMI_CONFIG, before.slice(0, start) + next + before.slice(rangeEnd));
+  log(true, "Kimi Code -> updated [" + PROVIDER + "]");
+}
+
+// Set base_url inside the [providers.oc] section; insert it after the header
+// line when the section has none. Pure string ops (scriptc static build has no
+// regex engine for .replace).
+function setBaseUrl(section: string, url: string): string {
+  const key = 'base_url = "';
+  const keyIdx = section.indexOf(key);
+  if (keyIdx === -1) {
+    const headerIdx = section.indexOf(KIMI_SECTION);
+    if (headerIdx === -1) return section;
+    const insertAt = headerIdx + KIMI_SECTION.length;
+    return section.slice(0, insertAt) + "\n" + key + url + '"' + section.slice(insertAt);
+  }
+  const quoteStart = keyIdx + key.length;
+  const quoteEnd = section.indexOf('"', quoteStart);
+  if (quoteEnd === -1) return section;
+  return section.slice(0, quoteStart) + url + section.slice(quoteEnd);
+}
+
+// ── Update OpenCode configs ─────────────────────────────
+
+// Discover existing opencode config files: global config dir, ~/.opencode,
+// then project-local .opencode dirs walking up from cwd. opencode.jsonc is
+// loaded after opencode.json, so when both exist the jsonc baseURL wins.
+function discoverOpenCodeConfigs(): string[] {
+  const result: string[] = [];
+  const seen: string[] = [];
+  const consider = (dir: string) => {
+    for (const name of ["opencode.jsonc", "opencode.json"]) {
+      const file = join(dir, name);
+      if (seen.indexOf(file) === -1 && existsSync(file)) {
+        seen.push(file);
+        result.push(file);
       }
     }
-    writeFileSync(KIMI_CONFIG, newLines.join("\n"));
-    console.log("  ✓ Kimi Code  -> added base_url to [providers." + PROVIDER + "]");
-  } else {
-    // No section — append
-    const append = "\n" + header + "\ntype = \"openai\"\nbase_url = \"" + url + "\"\n";
-    writeFileSync(KIMI_CONFIG, content + append);
-    console.log("  ✓ Kimi Code  -> created [providers." + PROVIDER + "]");
+  };
+  consider(HOME + "/.config/opencode");
+  consider(HOME + "/.opencode");
+  let dir = process.cwd();
+  while (true) {
+    consider(join(dir, ".opencode"));
+    const parent = dirname(dir);
+    if (parent === dir || dir === HOME) break;
+    dir = parent;
   }
+  return result;
 }
 
-// ── Update OpenCode opencode.jsonc ───────────────────────
-function updateOpenCode(url: string): void {
-  // Find all opencode config files
-  const configs = [
-    HOME + "/.config/opencode/opencode.jsonc",
-    HOME + "/code/opencode.jsonc",
-    HOME + "/self/opencode-x/.opencode/opencode.jsonc",
-  ];
-
-  let updated = 0;
-  for (const configPath of configs) {
-    if (!existsSync(configPath)) continue;
-    if (updateSingleOpenCode(configPath, url)) updated++;
-  }
-
-  if (updated === 0) {
-    const hasOpenCode = commandExists("opencode") || existsSync(HOME + "/.opencode");
-    if (!hasOpenCode) {
-      console.log("  - OpenCode   -> skipped (not installed)");
-      return;
-    }
-    // No existing config, create global one
-    const defaultPath = HOME + "/.config/opencode/opencode.jsonc";
-    const json = {
-      provider: {
-        [PROVIDER]: {
-          npm: "@ai-sdk/openai-compatible",
-          name: "oc proxy",
-          options: { baseURL: url },
-        },
-      },
-    };
-    mkdirSync(HOME + "/.config/opencode", { recursive: true });
-    writeFileSync(defaultPath, JSON.stringify(json, null, 2) + "\n");
-    console.log("  ✓ OpenCode   -> created provider." + PROVIDER);
-  } else {
-    console.log("  ✓ OpenCode   -> updated " + updated + " config(s)");
-  }
-}
-
+// scriptc static builds silently drop nested property assignment on JSON.parse
+// results, so opencode configs are edited as text: parse first to validate,
+// then splice the baseURL value with string operations only.
 function updateSingleOpenCode(configPath: string, url: string): boolean {
-  let json: Record<string, unknown>;
-
   try {
-    const parsed: unknown = JSON.parse(readFileSync(configPath, "utf8"));
-    if (typeof parsed === "object" && parsed !== null) {
-      json = parsed as Record<string, unknown>;
-    } else {
-      return false;
-    }
+    const original = readFileSync(configPath, "utf8");
+    if (!parseJsonc(original)) return false;
+    const next = editOpenCodeConfig(original, url);
+    if (next === original) return false;
+    writeFileSync(configPath, next);
+    return true;
   } catch {
     return false;
   }
+}
 
-  // Ensure provider object exists
-  if (typeof json.provider !== "object" || json.provider === null) {
-    json.provider = {};
+// Find the index of a `"key":` property, skipping whitespace before the colon.
+function findKey(text: string, key: string, from: number): number {
+  const needle = '"' + key + '"';
+  let idx = text.indexOf(needle, from);
+  while (idx !== -1) {
+    let i = idx + needle.length;
+    while (i < text.length && (text[i] === " " || text[i] === "\t" || text[i] === "\n" || text[i] === "\r")) i++;
+    if (text[i] === ":") return idx;
+    idx = text.indexOf(needle, idx + 1);
   }
-  const providers = json.provider as Record<string, unknown>;
+  return -1;
+}
 
-  // Ensure our provider section exists
-  if (typeof providers[PROVIDER] !== "object" || providers[PROVIDER] === null) {
-    providers[PROVIDER] = {
-      npm: "@ai-sdk/openai-compatible",
-      name: "oc proxy",
-      options: { baseURL: url },
-    };
-    writeFileSync(configPath, JSON.stringify(json, null, 2) + "\n");
-    return true;
+// Index of the `{` opening the object that `keyIdx` points at.
+function findBlockBody(text: string, keyIdx: number): number {
+  const colon = text.indexOf(":", keyIdx);
+  if (colon === -1) return -1;
+  let i = colon + 1;
+  while (i < text.length && (text[i] === " " || text[i] === "\t" || text[i] === "\n" || text[i] === "\r")) i++;
+  return text[i] === "{" ? i : -1;
+}
+
+// Index of the `}` closing the object opened at `openIdx`, skipping strings
+// and comments.
+function findBlockEnd(text: string, openIdx: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = openIdx; i < text.length; i++) {
+    const c = text[i];
+    const next = text[i + 1] ?? "";
+    if (inString) {
+      if (c === "\\") {
+        i++;
+      } else if (c === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      i += 2;
+      while (i + 1 < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    if (c === "{") depth++;
+    if (c === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
   }
+  return -1;
+}
 
-  const prov = providers[PROVIDER] as Record<string, unknown>;
-
-  // Always use options.baseURL
-  if (typeof prov.options !== "object" || prov.options === null) {
-    prov.options = {};
+function isEmptyBlock(text: string, openIdx: number, closeIdx: number): boolean {
+  for (let i = openIdx + 1; i < closeIdx; i++) {
+    const c = text[i];
+    if (c !== " " && c !== "\t" && c !== "\n" && c !== "\r") return false;
   }
-  (prov.options as Record<string, unknown>).baseURL = url;
-  writeFileSync(configPath, JSON.stringify(json, null, 2) + "\n");
   return true;
+}
+
+// Replace the string value of the property at `keyIdx` and return the new
+// text, or the original text when the value is not a quoted string.
+function replaceStringValue(text: string, keyIdx: number, value: string): string {
+  const colon = text.indexOf(":", keyIdx);
+  if (colon === -1) return text;
+  let i = colon + 1;
+  while (i < text.length && (text[i] === " " || text[i] === "\t" || text[i] === "\n" || text[i] === "\r")) i++;
+  if (text[i] !== '"') return text;
+  const valueStart = i;
+  i++;
+  while (i < text.length) {
+    if (text[i] === "\\") {
+      i += 2;
+    } else if (text[i] === '"') {
+      return text.slice(0, valueStart + 1) + value + text.slice(i);
+    } else {
+      i++;
+    }
+  }
+  return text;
+}
+
+// Splice `chunk` right before the root object's closing brace.
+function insertBeforeRootClose(text: string, chunk: string): string {
+  const close = text.lastIndexOf("}");
+  if (close === -1) return text;
+  return text.slice(0, close) + chunk + text.slice(close);
+}
+
+function editOpenCodeConfig(text: string, url: string): string {
+  const ocEntry =
+    '"oc": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "oc proxy",\n      "options": { "baseURL": "' + url + '" }\n    }';
+  const providerIdx = findKey(text, "provider", 0);
+  if (providerIdx === -1) {
+    const rootOpen = text.indexOf("{");
+    const rootClose = text.lastIndexOf("}");
+    if (rootOpen === -1 || rootClose === -1) return text;
+    const chunk = (isEmptyBlock(text, rootOpen, rootClose) ? "" : ",\n  ") + '"provider": {\n    ' + ocEntry + "\n  }";
+    return insertBeforeRootClose(text, chunk);
+  }
+  const providerBody = findBlockBody(text, providerIdx);
+  if (providerBody === -1) return text;
+  const providerEnd = findBlockEnd(text, providerBody);
+  if (providerEnd === -1) return text;
+  const ocIdx = findKey(text, "oc", providerBody);
+  if (ocIdx === -1 || ocIdx > providerEnd) {
+    const chunk = (isEmptyBlock(text, providerBody, providerEnd) ? "" : ",\n    ") + ocEntry;
+    return text.slice(0, providerEnd) + chunk + text.slice(providerEnd);
+  }
+  const ocBody = findBlockBody(text, ocIdx);
+  if (ocBody === -1 || ocBody > providerEnd) return text;
+  const ocEnd = findBlockEnd(text, ocBody);
+  if (ocEnd === -1 || ocEnd > providerEnd) return text;
+  const urlIdx = findKey(text, "baseURL", ocIdx);
+  if (urlIdx !== -1 && urlIdx < ocEnd) return replaceStringValue(text, urlIdx, url);
+  const optionsIdx = findKey(text, "options", ocIdx);
+  if (optionsIdx !== -1 && optionsIdx < ocEnd) {
+    const optionsBody = findBlockBody(text, optionsIdx);
+    if (optionsBody !== -1 && optionsBody < ocEnd) {
+      return text.slice(0, optionsBody + 1) + ' "baseURL": "' + url + '",' + text.slice(optionsBody + 1);
+    }
+    return text;
+  }
+  const chunk = (isEmptyBlock(text, ocBody, ocEnd) ? "" : ",\n      ") + '"options": { "baseURL": "' + url + '" }';
+  return text.slice(0, ocEnd) + chunk + text.slice(ocEnd);
+}
+
+function updateOpenCode(url: string): void {
+  const configs = discoverOpenCodeConfigs();
+  let updated = 0;
+  for (const configPath of configs) {
+    if (updateSingleOpenCode(configPath, url)) updated++;
+  }
+  if (updated > 0) {
+    log(true, "OpenCode -> updated " + updated + " config(s)");
+    return;
+  }
+  if (configs.length > 0) {
+    log(false, "OpenCode -> skipped (existing configs not parseable)");
+    return;
+  }
+  if (!(cmdExists("opencode") || existsSync(HOME + "/.opencode"))) {
+    log(false, "OpenCode -> skipped (not installed)");
+    return;
+  }
+  const defaultPath = HOME + "/.config/opencode/opencode.jsonc";
+  mkdirSync(dirname(defaultPath), { recursive: true });
+  writeFileSync(
+    defaultPath,
+    JSON.stringify({ provider: { [PROVIDER]: { npm: "@ai-sdk/openai-compatible", name: "oc proxy", options: { baseURL: url } } } }, null, 2) + "\n",
+  );
+  log(true, "OpenCode -> created provider." + PROVIDER);
 }
 
 // ── Commands ────────────────────────────────────────────
 
 function cmdCurrent(): void {
   const cfg = loadConfig();
-  if (!cfg.current) {
-    console.log("No endpoint selected. Use: oc use NAME");
-    return;
-  }
-  const ep = findEndpoint(cfg.endpoints, cfg.current);
+  const ep = cfg.current ? findEndpoint(cfg.endpoints, cfg.current) : null;
   if (!ep) {
-    console.log('Current endpoint "' + cfg.current + '" not found.');
+    console.log("No endpoint selected. Use: oc use NAME");
     return;
   }
   console.log("Current: " + ep.name);
@@ -270,8 +472,7 @@ function cmdList(): void {
   }
   for (let i = 0; i < cfg.endpoints.length; i++) {
     const ep = cfg.endpoints[i];
-    const marker = ep.name === cfg.current ? " ←" : "";
-    console.log("  " + (i + 1) + ". " + ep.name + marker);
+    console.log("  " + (i + 1) + ". " + ep.name + (ep.name === cfg.current ? " ←" : ""));
     console.log("     " + ep.url);
   }
 }
@@ -283,6 +484,10 @@ function cmdAdd(args: string[]): void {
   }
   const name = args[0];
   const url = args[1];
+  if (!/^https?:\/\/\S+$/.test(url)) {
+    console.log("Invalid URL: " + url);
+    return;
+  }
   const cfg = loadConfig();
   if (findEndpoint(cfg.endpoints, name)) {
     console.log('Endpoint "' + name + '" already exists.');
@@ -298,14 +503,12 @@ function cmdUse(args: string[]): void {
     console.log("Usage: oc use NAME");
     return;
   }
-  const name = args.join(" ");
   const cfg = loadConfig();
-  const ep = findEndpoint(cfg.endpoints, name);
+  const ep = findEndpoint(cfg.endpoints, args.join(" "));
   if (!ep) {
-    console.log('Endpoint "' + name + '" not found. Run "oc list" to see options.');
+    console.log('Endpoint "' + args.join(" ") + '" not found. Run "oc list" to see options.');
     process.exit(1);
   }
-
   console.log("Switching to: " + ep.name);
   console.log("URL:          " + ep.url);
   console.log("");
@@ -322,15 +525,13 @@ function cmdDel(args: string[]): void {
     console.log("Usage: oc del NAME");
     return;
   }
-  const name = args.join(" ");
   const cfg = loadConfig();
-  const ep = findEndpoint(cfg.endpoints, name);
+  const ep = findEndpoint(cfg.endpoints, args.join(" "));
   if (!ep) {
-    console.log('Endpoint "' + name + '" not found.');
+    console.log('Endpoint "' + args.join(" ") + '" not found.');
     process.exit(1);
   }
-  const idx = cfg.endpoints.indexOf(ep);
-  cfg.endpoints.splice(idx, 1);
+  cfg.endpoints.splice(cfg.endpoints.indexOf(ep), 1);
   if (cfg.current === ep.name) {
     cfg.current = null;
   }
@@ -338,11 +539,40 @@ function cmdDel(args: string[]): void {
   console.log("✓ Deleted: " + ep.name);
 }
 
-function cmdCompletion(args: string[]): void {
-  if (args.length < 1 || args[0] !== "fish") {
-    console.log("Usage: oc completion fish");
+function cmdTest(args: string[]): void {
+  const cfg = loadConfig();
+  const name = args.length > 0 ? args.join(" ") : "";
+  if (name) {
+    const ep = findEndpoint(cfg.endpoints, name);
+    if (!ep) {
+      console.log('Endpoint "' + name + '" not found.');
+      return;
+    }
+    probeEndpoints([ep]);
     return;
   }
+  if (cfg.endpoints.length === 0) {
+    console.log("No endpoints. Use: oc add NAME URL");
+    return;
+  }
+  probeEndpoints(cfg.endpoints);
+}
+
+function probeEndpoints(endpoints: Endpoint[]): void {
+  for (const ep of endpoints) {
+    const probe = stripTrailingSlashes(ep.url) + "/models";
+    let status: string;
+    try {
+      const res = spawnSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code} %{time_total}", "-m", "5", probe]);
+      status = res.status === 0 ? String(res.stdout).trim() : "unreachable";
+    } catch {
+      status = "unreachable";
+    }
+    console.log(status.startsWith("2") || status.startsWith("3") ? "  ✓" : "  ✗", ep.name + "  " + status);
+  }
+}
+
+function cmdCompletion(): void {
   const lines = [
     "# Fish completions for oc (opencode proxy switcher)",
     "",
@@ -350,6 +580,7 @@ function cmdCompletion(args: string[]): void {
     "complete -c oc -f -n \"__fish_use_subcommand\" -a add -d \"Add an endpoint\"",
     "complete -c oc -f -n \"__fish_use_subcommand\" -a use -d \"Switch to an endpoint\"",
     "complete -c oc -f -n \"__fish_use_subcommand\" -a del -d \"Delete an endpoint\"",
+    "complete -c oc -f -n \"__fish_use_subcommand\" -a test -d \"Check endpoint reachability\"",
     "complete -c oc -f -n \"__fish_use_subcommand\" -a current -d \"Show current endpoint\"",
     "complete -c oc -f -n \"__fish_use_subcommand\" -a help -d \"Show help\"",
     "",
@@ -359,9 +590,10 @@ function cmdCompletion(args: string[]): void {
     "",
     "complete -c oc -f -n \"__fish_seen_subcommand_from use\" -a \"(__oc_endpoint_names)\"",
     "complete -c oc -f -n \"__fish_seen_subcommand_from del\" -a \"(__oc_endpoint_names)\"",
+    "complete -c oc -f -n \"__fish_seen_subcommand_from test\" -a \"(__oc_endpoint_names)\"",
   ];
-  for (let i = 0; i < lines.length; i++) {
-    console.log(lines[i]);
+  for (const line of lines) {
+    console.log(line);
   }
 }
 
@@ -374,6 +606,7 @@ function printHelp(): void {
   console.log("  oc add NAME URL       Add an endpoint");
   console.log("  oc use NAME           Switch client configs to an endpoint");
   console.log("  oc del NAME           Delete an endpoint");
+  console.log("  oc test [NAME]        Check endpoint reachability");
   console.log("  oc current            Show current endpoint");
   console.log("  oc completion fish    Generate fish shell completions");
   console.log("  oc help               Show this help");
@@ -390,18 +623,19 @@ function printHelp(): void {
 }
 
 // ── Main ────────────────────────────────────────────────
+
 function main(): void {
   const argv = process.argv;
   const cmd = argv.length > 2 ? argv[2] : "current";
   const args = argv.slice(3);
-
   switch (cmd) {
-    case "list":    cmdList(); break;
-    case "add":     cmdAdd(args); break;
-    case "use":     cmdUse(args); break;
-    case "del":     cmdDel(args); break;
+    case "list": cmdList(); break;
+    case "add": cmdAdd(args); break;
+    case "use": cmdUse(args); break;
+    case "del": cmdDel(args); break;
+    case "test": cmdTest(args); break;
     case "current": cmdCurrent(); break;
-    case "completion": cmdCompletion(args); break;
+    case "completion": cmdCompletion(); break;
     case "help":
     case "--help":
     case "-h":
