@@ -2,8 +2,8 @@
 // Build: scriptc build cli/oc.ts -o cli/oc
 //
 // 端点列表存储在本地 ~/.oc/config.json
-// oc use 切换时自动更新 kimi-code 和 opencode 配置
-// 如果没有 oc 供应商段，自动创建
+// oc use 切换时自动更新已安装的 agent（kimi-code / opencode）配置
+// 如果 agent 未安装则跳过，如果已安装但没有 oc 供应商段，自动创建
 //
 // Usage:
 //   oc                    Show current endpoint
@@ -17,6 +17,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
+import { spawnSync } from "node:child_process";
 
 // ── Paths ───────────────────────────────────────────────
 const HOME = homedir();
@@ -90,12 +91,33 @@ function findEndpoint(endpoints: Endpoint[], name: string): Endpoint | null {
   return null;
 }
 
+// ── Agent detection ─────────────────────────────────────
+function commandExists(cmd: string): boolean {
+  try {
+    const res = spawnSync("which", [cmd], { stdio: "ignore" });
+    return res.status === 0;
+  } catch {
+    return false;
+  }
+}
+
 // ── Update Kimi Code config.toml ────────────────────────
 function updateKimi(url: string): void {
   const header = "[providers." + PROVIDER + "]";
 
   if (!existsSync(KIMI_CONFIG)) {
+    // Only create if kimi-code is actually installed
+    const hasKimi =
+      existsSync(HOME + "/.kimi-code") ||
+      commandExists("kimi") ||
+      commandExists("kimi-code") ||
+      commandExists("kimi-cli");
+    if (!hasKimi) {
+      console.log("  - Kimi Code  -> skipped (not installed)");
+      return;
+    }
     // Create config with oc provider section
+    mkdirSync(HOME + "/.kimi-code", { recursive: true });
     const content = header + "\ntype = \"openai\"\nbase_url = \"" + url + "\"\n";
     writeFileSync(KIMI_CONFIG, content);
     console.log("  ✓ Kimi Code  -> created [providers." + PROVIDER + "]");
@@ -157,6 +179,11 @@ function updateOpenCode(url: string): void {
   }
 
   if (updated === 0) {
+    const hasOpenCode = commandExists("opencode") || existsSync(HOME + "/.opencode");
+    if (!hasOpenCode) {
+      console.log("  - OpenCode   -> skipped (not installed)");
+      return;
+    }
     // No existing config, create global one
     const defaultPath = HOME + "/.config/opencode/opencode.jsonc";
     const json = {
