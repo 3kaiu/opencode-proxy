@@ -59,13 +59,19 @@ oc help               # 帮助
 ### 初始化
 
 ```bash
-oc init <worker-url> <account-id> <kv-namespace-id>
+# 零配置自动发现（推荐）
+oc init
 
-# 示例
-oc init https://<your-worker>.workers.dev <account-id> <kv-namespace-id>
+# 手动指定
+oc init <worker-url> <account-id> <kv-namespace-id>
 ```
 
-参数说明：
+自动发现模式需要 `CLOUDFLARE_API_TOKEN` 环境变量或 `wrangler login` 授权。会自动：
+- 获取 account ID
+- 获取 workers.dev 子域名，构建 worker URL
+- 查找或创建名为 `oc-router` 的 KV namespace
+
+手动模式参数说明：
 - `worker-url`：Worker 的公网 URL（不含路径）
 - `account-id`：Dashboard URL 中的 hex ID
 - `kv-namespace-id`：用 `wrangler kv namespace create ENDPOINT_STATE` 创建后得到的 id
