@@ -19,7 +19,7 @@
 //
 // Config:  ~/.oc/config.json  (仅存 CF 连接信息 + 当前选择，不存端点)
 // Kimi:    ~/.kimi-code/config.toml        [providers.oc] base_url
-// OpenCode: ~/.config/opencode/opencode.json  provider.oc.baseURL
+// OpenCode: ~/.config/opencode/opencode.jsonc  provider.oc.baseURL
 //
 // CF Auth (二选一，oc 不存储任何凭据):
 //   1. export CLOUDFLARE_API_TOKEN="..."   (环境变量，推荐)
@@ -34,7 +34,7 @@ const HOME = homedir();
 const CONFIG_DIR = HOME + "/.oc";
 const CONFIG_FILE = CONFIG_DIR + "/config.json";
 const KIMI_CONFIG = HOME + "/.kimi-code/config.toml";
-const OPENCODE_CONFIG = HOME + "/.config/opencode/opencode.json";
+const OPENCODE_CONFIG = HOME + "/.config/opencode/opencode.jsonc";
 const KIMI_PROVIDER = "oc";
 const OPENCODE_PROVIDER = "oc";
 const KV_KEY_ENDPOINTS = "endpoints";
@@ -46,11 +46,11 @@ interface Endpoint {
 }
 
 interface CloudflareConfig {
-  workerUrl: string;      // Worker 公网 URL（数据面入口）
-  accountId: string;      // CF account ID
-  kvNamespaceId: string;  // KV namespace ID
-  workerName: string;     // wrangler.toml 中的 name
-  cloudflareDir: string;  // cloudflare/ 目录路径（wrangler fallback）
+  workerUrl: string;
+  accountId: string;
+  kvNamespaceId: string;
+  workerName: string;
+  cloudflareDir: string;
 }
 
 interface OcConfig {
@@ -58,10 +58,64 @@ interface OcConfig {
   cloudflare?: CloudflareConfig;
 }
 
-interface TestResult {
-  name: string;
+// ── HTTP via curl (static-compatible, no fetch needed) ──
+interface CurlResult {
   status: number;
-  ms: number;
+  body: string;
+}
+
+function curlGet(url: string, headers: string[], timeoutMs: number): CurlResult {
+  const headerArgs: string[] = [];
+  for (let i = 0; i < headers.length; i++) {
+    headerArgs.push("-H");
+    headerArgs.push(headers[i]);
+  }
+  const args = ["-s", "-w", "\\n%{http_code}", "--max-time", String(timeoutMs / 1000)];
+  for (let i = 0; i < headerArgs.length; i++) {
+    args.push(headerArgs[i]);
+  }
+  args.push(url);
+  const cmd = "curl " + args.map((a) => "'" + a.replace(/'/g, "'\\''") + "'").join(" ");
+  try {
+    const out = execSync(cmd, { timeout: timeoutMs + 2000, stdio: ["pipe", "pipe", "pipe"] }).toString();
+    const lastNl = out.lastIndexOf("\n");
+    const statusStr = out.slice(lastNl + 1).trim();
+    const body = out.slice(0, lastNl);
+    const status = parseInt(statusStr, 10);
+    return { status: isNaN(status) ? 0 : status, body };
+  } catch {
+    return { status: 0, body: "" };
+  }
+}
+
+function curlPut(url: string, headers: string[], body: string, timeoutMs: number): CurlResult {
+  const headerArgs: string[] = [];
+  for (let i = 0; i < headers.length; i++) {
+    headerArgs.push("-H");
+    headerArgs.push(headers[i]);
+  }
+  const args = ["-s", "-w", "\\n%{http_code}", "-X", "PUT", "--max-time", String(timeoutMs / 1000)];
+  for (let i = 0; i < headerArgs.length; i++) {
+    args.push(headerArgs[i]);
+  }
+  args.push("-d");
+  args.push("@-");
+  args.push(url);
+  const cmd = "curl " + args.map((a) => "'" + a.replace(/'/g, "'\\''") + "'").join(" ");
+  try {
+    const out = execSync(cmd, {
+      input: body,
+      timeout: timeoutMs + 2000,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).toString();
+    const lastNl = out.lastIndexOf("\n");
+    const statusStr = out.slice(lastNl + 1).trim();
+    const respBody = out.slice(0, lastNl);
+    const status = parseInt(statusStr, 10);
+    return { status: isNaN(status) ? 0 : status, body: respBody };
+  } catch {
+    return { status: 0, body: "" };
+  }
 }
 
 // ── Config I/O ──────────────────────────────────────────
@@ -71,7 +125,27 @@ function loadConfig(): OcConfig {
   }
   try {
     const raw = readFileSync(CONFIG_FILE, "utf8");
-    return JSON.parse(raw) as OcConfig;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === "object" && parsed !== null) {
+      const obj = parsed as Record<string, unknown>;
+      const current = typeof obj.current === "string" ? obj.current : null;
+      const cf = obj.cloudflare;
+      if (typeof cf === "object" && cf !== null) {
+        const cfObj = cf as Record<string, unknown>;
+        return {
+          current,
+          cloudflare: {
+            workerUrl: String(cfObj.workerUrl || ""),
+            accountId: String(cfObj.accountId || ""),
+            kvNamespaceId: String(cfObj.kvNamespaceId || ""),
+            workerName: String(cfObj.workerName || ""),
+            cloudflareDir: String(cfObj.cloudflareDir || ""),
+          },
+        };
+      }
+      return { current };
+    }
+    return { current: null };
   } catch {
     return { current: null };
   }
@@ -93,25 +167,15 @@ function requireCf(cfg: OcConfig): CloudflareConfig {
 }
 
 // ── CF KV 读写 ──────────────────────────────────────────
-// 认证优先级：CLOUDFLARE_API_TOKEN 环境变量 → wrangler CLI
-
 async function kvGet(cf: CloudflareConfig, key: string): Promise<string | null> {
-  // 方式一：CF API
   const token = process.env.CLOUDFLARE_API_TOKEN;
   if (token) {
-    try {
-      const res = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${cf.accountId}/storage/kv/namespaces/${cf.kvNamespaceId}/values/${key}`,
-        { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
-      );
-      if (res.status === 404) return null;
-      if (!res.ok) throw new Error(`KV get failed: ${res.status}`);
-      return await res.text();
-    } catch {
-      // fall through to wrangler
-    }
+    const url = `https://api.cloudflare.com/client/v4/accounts/${cf.accountId}/storage/kv/namespaces/${cf.kvNamespaceId}/values/${key}`;
+    const res = curlGet(url, [`Authorization: Bearer ${token}`], 10_000);
+    if (res.status === 404) return null;
+    if (res.status >= 200 && res.status < 300) return res.body;
+    // fall through to wrangler
   }
-  // 方式二：wrangler
   try {
     const out = execSync(`wrangler kv key get ${key}`, {
       cwd: cf.cloudflareDir,
@@ -126,25 +190,12 @@ async function kvGet(cf: CloudflareConfig, key: string): Promise<string | null> 
 }
 
 async function kvPut(cf: CloudflareConfig, key: string, value: string): Promise<boolean> {
-  // 方式一：CF API
   const token = process.env.CLOUDFLARE_API_TOKEN;
   if (token) {
-    try {
-      const res = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${cf.accountId}/storage/kv/namespaces/${cf.kvNamespaceId}/values/${key}`,
-        {
-          method: "PUT",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "text/plain" },
-          body: value,
-          signal: AbortSignal.timeout(10_000),
-        },
-      );
-      if (res.ok) return true;
-    } catch {
-      // fall through to wrangler
-    }
+    const url = `https://api.cloudflare.com/client/v4/accounts/${cf.accountId}/storage/kv/namespaces/${cf.kvNamespaceId}/values/${key}`;
+    const res = curlPut(url, [`Authorization: Bearer ${token}`, "Content-Type: text/plain"], value, 10_000);
+    if (res.status >= 200 && res.status < 300) return true;
   }
-  // 方式二：wrangler
   try {
     execSync(`wrangler kv key put ${key}`, {
       cwd: cf.cloudflareDir,
@@ -161,12 +212,30 @@ async function kvPut(cf: CloudflareConfig, key: string, value: string): Promise<
 
 async function loadEndpoints(cf: CloudflareConfig): Promise<Endpoint[]> {
   const raw = await kvGet(cf, KV_KEY_ENDPOINTS);
-  if (!raw) return [];
+  if (!raw) {
+    const empty: Endpoint[] = [];
+    return empty;
+  }
   try {
-    const eps = JSON.parse(raw) as Endpoint[];
-    return Array.isArray(eps) ? eps : [];
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      const result: Endpoint[] = [];
+      for (let i = 0; i < parsed.length; i++) {
+        const item = parsed[i];
+        if (typeof item === "object" && item !== null) {
+          const obj = item as Record<string, unknown>;
+          if (typeof obj.name === "string" && typeof obj.url === "string") {
+            result.push({ name: obj.name, url: obj.url });
+          }
+        }
+      }
+      return result;
+    }
+    const empty: Endpoint[] = [];
+    return empty;
   } catch {
-    return [];
+    const empty: Endpoint[] = [];
+    return empty;
   }
 }
 
@@ -176,17 +245,17 @@ async function saveEndpoints(cf: CloudflareConfig, endpoints: Endpoint[]): Promi
     console.log(`  ✓ CF KV synced (${endpoints.length} endpoints)`);
   } else {
     console.log("  ✗ CF KV write failed. Set CLOUDFLARE_API_TOKEN or run: wrangler login");
-    process.exitCode = 1;
+    process.exit(1);
   }
 }
 
 function findEndpoint(endpoints: Endpoint[], name: string): Endpoint | null {
-  for (const ep of endpoints) {
-    if (ep.name === name) return ep;
+  for (let i = 0; i < endpoints.length; i++) {
+    if (endpoints[i].name === name) return endpoints[i];
   }
   const lower = name.toLowerCase();
-  for (const ep of endpoints) {
-    if (ep.name.toLowerCase() === lower) return ep;
+  for (let i = 0; i < endpoints.length; i++) {
+    if (endpoints[i].name.toLowerCase() === lower) return endpoints[i];
   }
   const idx = parseInt(name, 10);
   if (!isNaN(idx) && idx >= 1 && idx <= endpoints.length) {
@@ -226,39 +295,56 @@ function updateKimi(url: string): void {
   }
 }
 
-// ── Update OpenCode opencode.json ───────────────────────
+// ── Update OpenCode opencode.jsonc ───────────────────────
 function updateOpenCode(url: string): void {
   if (!existsSync(OPENCODE_CONFIG)) {
-    console.log("  ⚠ OpenCode opencode.json not found");
+    console.log("  ⚠ OpenCode opencode.jsonc not found");
     return;
   }
   let json: Record<string, unknown>;
   try {
-    json = JSON.parse(readFileSync(OPENCODE_CONFIG, "utf8")) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(readFileSync(OPENCODE_CONFIG, "utf8"));
+    if (typeof parsed === "object" && parsed !== null) {
+      json = parsed as Record<string, unknown>;
+    } else {
+      console.log("  ⚠ opencode.jsonc is not valid JSON object");
+      return;
+    }
   } catch {
-    console.log("  ⚠ opencode.json is not valid JSON");
+    console.log("  ⚠ opencode.jsonc is not valid JSON");
     return;
   }
 
-  const providers = json.provider as Record<string, Record<string, unknown>> | undefined;
-  const provider = providers?.[OPENCODE_PROVIDER];
-  if (!provider) {
-    console.log(`  ⚠ Provider "${OPENCODE_PROVIDER}" not found in opencode.json`);
+  const providerObj = json.provider;
+  if (typeof providerObj !== "object" || providerObj === null) {
+    console.log(`  ⚠ Provider "${OPENCODE_PROVIDER}" not found in opencode.jsonc`);
+    return;
+  }
+  const providers = providerObj as Record<string, unknown>;
+  const provider = providers[OPENCODE_PROVIDER];
+  if (typeof provider !== "object" || provider === null) {
+    console.log(`  ⚠ Provider "${OPENCODE_PROVIDER}" not found in opencode.jsonc`);
     return;
   }
 
-  const options = provider.options as Record<string, unknown> | undefined;
-  if (options && typeof options.baseURL === "string") {
-    options.baseURL = url;
-  } else if (typeof provider.baseURL === "string") {
-    provider.baseURL = url;
-  } else {
-    console.log(`  ⚠ baseURL not found in provider "${OPENCODE_PROVIDER}"`);
+  const prov = provider as Record<string, unknown>;
+  const options = prov.options;
+  if (typeof options === "object" && options !== null) {
+    const opts = options as Record<string, unknown>;
+    if (typeof opts.baseURL === "string") {
+      opts.baseURL = url;
+      writeFileSync(OPENCODE_CONFIG, JSON.stringify(json, null, 2) + "\n");
+      console.log("  ✓ OpenCode  -> provider." + OPENCODE_PROVIDER);
+      return;
+    }
+  }
+  if (typeof prov.baseURL === "string") {
+    prov.baseURL = url;
+    writeFileSync(OPENCODE_CONFIG, JSON.stringify(json, null, 2) + "\n");
+    console.log("  ✓ OpenCode  -> provider." + OPENCODE_PROVIDER);
     return;
   }
-
-  writeFileSync(OPENCODE_CONFIG, JSON.stringify(json, null, 2) + "\n");
-  console.log("  ✓ OpenCode  -> provider." + OPENCODE_PROVIDER);
+  console.log(`  ⚠ baseURL not found in provider "${OPENCODE_PROVIDER}"`);
 }
 
 // ── Commands ────────────────────────────────────────────
@@ -273,7 +359,6 @@ async function cmdCurrent(): Promise<void> {
   const endpoints = await loadEndpoints(cf);
   const ep = findEndpoint(endpoints, cfg.current);
 
-  // 如果选的是 cf-router 本身（不在端点列表里），直接显示 worker URL
   if (!ep && cfg.current === "cf-router") {
     console.log("Current: cf-router");
     console.log("URL:     " + cf.workerUrl + "/zen/v1");
@@ -285,17 +370,33 @@ async function cmdCurrent(): Promise<void> {
     console.log("URL:     " + ep.url);
   }
 
-  // 附带路由健康摘要
   try {
-    const res = await fetch(cf.workerUrl + "/health", { signal: AbortSignal.timeout(3000) });
-    const data = JSON.parse(await res.text()) as Record<string, unknown>;
-    const eps = data.endpoints as Array<Record<string, unknown>>;
-    const exhausted = eps.filter((e) => e.exhausted);
-    if (exhausted.length === 0) {
-      console.log(`Router:  ${data.available} ✓`);
-    } else {
-      const names = exhausted.map((e) => String(e.name)).join(", ");
-      console.log(`Router:  ${data.available}  ✗ ${names}`);
+    const res = curlGet(cf.workerUrl + "/health", [], 3000);
+    if (res.status === 200 && res.body.length > 0) {
+      const parsed: unknown = JSON.parse(res.body);
+      if (typeof parsed === "object" && parsed !== null) {
+        const data = parsed as Record<string, unknown>;
+        const available = data.available;
+        const epsRaw = data.endpoints;
+        if (Array.isArray(epsRaw)) {
+          const exhausted: string[] = [];
+          for (let i = 0; i < epsRaw.length; i++) {
+            const e = epsRaw[i];
+            if (typeof e === "object" && e !== null) {
+              const epObj = e as Record<string, unknown>;
+              if (epObj.exhausted === true && typeof epObj.name === "string") {
+                exhausted.push(epObj.name);
+              }
+            }
+          }
+          if (exhausted.length === 0) {
+            console.log(`Router:  ${available} ✓`);
+          } else {
+            const names = exhausted.join(", ");
+            console.log(`Router:  ${available}  ✗ ${names}`);
+          }
+        }
+      }
     }
   } catch {
     // 路由不可达时不干扰输出
@@ -346,7 +447,6 @@ async function cmdUse(args: string[]): Promise<void> {
   const cfg = loadConfig();
   const cf = requireCf(cfg);
 
-  // cf-router 是特殊名称，指向 Worker 自身
   let url: string;
   if (name === "cf-router") {
     url = cf.workerUrl + "/zen/v1";
@@ -355,8 +455,7 @@ async function cmdUse(args: string[]): Promise<void> {
     const ep = findEndpoint(endpoints, name);
     if (!ep) {
       console.log(`Endpoint "${name}" not found. Run "oc list" to see options.`);
-      process.exitCode = 1;
-      return;
+      process.exit(1);
     }
     url = ep.url;
   }
@@ -384,8 +483,7 @@ async function cmdDel(args: string[]): Promise<void> {
   const ep = findEndpoint(endpoints, name);
   if (!ep) {
     console.log(`Endpoint "${name}" not found.`);
-    process.exitCode = 1;
-    return;
+    process.exit(1);
   }
   const idx = endpoints.indexOf(ep);
   endpoints.splice(idx, 1);
@@ -406,10 +504,10 @@ async function cmdTest(args: string[]): Promise<void> {
     const ep = findEndpoint(endpoints, name);
     if (!ep) {
       console.log(`Endpoint "${name}" not found.`);
-      process.exitCode = 1;
-      return;
+      process.exit(1);
     }
-    endpoints = [ep];
+    const single: Endpoint[] = [ep];
+    endpoints = single;
   }
   if (endpoints.length === 0) {
     console.log("No endpoints to test.");
@@ -417,26 +515,18 @@ async function cmdTest(args: string[]): Promise<void> {
   }
   console.log("Testing endpoints (/models, 5s timeout)...\n");
 
-  const results = await Promise.all(
-    endpoints.map(async (ep): Promise<TestResult> => {
-      const base = ep.url.replace(/\/+$/, "");
-      const start = Date.now();
-      try {
-        const res = await fetch(base + "/models", { signal: AbortSignal.timeout(5000) });
-        return { name: ep.name, status: res.status, ms: Date.now() - start };
-      } catch {
-        return { name: ep.name, status: 0, ms: Date.now() - start };
-      }
-    }),
-  );
-
-  for (const r of results) {
-    const label = r.name.padEnd(14);
-    if (r.status === 0) {
+  for (let i = 0; i < endpoints.length; i++) {
+    const ep = endpoints[i];
+    const base = ep.url.replace(/\/+$/, "");
+    const start = Date.now();
+    const res = curlGet(base + "/models", [], 5000);
+    const ms = Date.now() - start;
+    const label = ep.name.padEnd(14);
+    if (res.status === 0) {
       console.log(`  ${label} ✗ ERR`);
     } else {
-      const sym = r.status === 200 ? "✓" : "✗";
-      console.log(`  ${label} ${sym} ${r.status}  ${r.ms}ms`);
+      const sym = res.status === 200 ? "✓" : "✗";
+      console.log(`  ${label} ${sym} ${res.status}  ${ms}ms`);
     }
   }
 }
@@ -449,8 +539,7 @@ async function cmdImport(args: string[]): Promise<void> {
   const file = args[0];
   if (!existsSync(file)) {
     console.log("File not found: " + file);
-    process.exitCode = 1;
-    return;
+    process.exit(1);
   }
   const content = readFileSync(file, "utf8");
   const lines = content.split("\n");
@@ -458,7 +547,8 @@ async function cmdImport(args: string[]): Promise<void> {
   const cf = requireCf(cfg);
   const endpoints = await loadEndpoints(cf);
   let added = 0;
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
     const sep = trimmed.indexOf("|");
@@ -482,21 +572,35 @@ async function cmdImport(args: string[]): Promise<void> {
 async function cmdStatus(): Promise<void> {
   const cfg = loadConfig();
   const cf = requireCf(cfg);
+  const res = curlGet(cf.workerUrl + "/health", [], 5000);
+  if (res.status !== 200 || res.body.length === 0) {
+    console.log("✗ Cannot reach CF router at " + cf.workerUrl);
+    process.exit(1);
+  }
   try {
-    const res = await fetch(cf.workerUrl + "/health", { signal: AbortSignal.timeout(5000) });
-    const data = JSON.parse(await res.text()) as Record<string, unknown>;
-    console.log(`Router:    ${cf.workerUrl}`);
-    console.log(`Version:   ${data.version}`);
-    console.log(`Available: ${data.available}`);
-    console.log("");
-    const endpoints = data.endpoints as Array<Record<string, unknown>>;
-    for (const ep of endpoints) {
-      const mark = ep.exhausted ? "✗ exhausted" : "✓ available";
-      console.log(`  ${String(ep.name).padEnd(12)} ${mark}`);
+    const parsed: unknown = JSON.parse(res.body);
+    if (typeof parsed === "object" && parsed !== null) {
+      const data = parsed as Record<string, unknown>;
+      console.log(`Router:    ${cf.workerUrl}`);
+      console.log(`Version:   ${data.version}`);
+      console.log(`Available: ${data.available}`);
+      console.log("");
+      const epsRaw = data.endpoints;
+      if (Array.isArray(epsRaw)) {
+        for (let i = 0; i < epsRaw.length; i++) {
+          const e = epsRaw[i];
+          if (typeof e === "object" && e !== null) {
+            const epObj = e as Record<string, unknown>;
+            const name = typeof epObj.name === "string" ? epObj.name : "unknown";
+            const mark = epObj.exhausted === true ? "✗ exhausted" : "✓ available";
+            console.log(`  ${name.padEnd(12)} ${mark}`);
+          }
+        }
+      }
     }
   } catch {
-    console.log("✗ Cannot reach CF router at " + cf.workerUrl);
-    process.exitCode = 1;
+    console.log("✗ Cannot parse router response");
+    process.exit(1);
   }
 }
 
@@ -565,11 +669,7 @@ function printHelp(): void {
   console.log("  wrangler login                      # OAuth, wrangler manages token");
   console.log("");
   console.log("Install:");
-  console.log("  scriptc build cli/oc.ts -o cli/oc");
-  console.log("  cp cli/oc ~/bin/oc");
-  console.log('  # fish:  fish_add_path ~/bin             >> ~/.config/fish/config.fish');
-  console.log('  # zsh:   export PATH="$HOME/bin:$PATH"   >> ~/.zshrc');
-  console.log('  # bash:  export PATH="$HOME/bin:$PATH"   >> ~/.bashrc');
+  console.log("  curl -fsSL https://github.com/3kaiu/opencode-proxy/raw/main/install.sh | sh");
   console.log("");
   console.log("Uninstall:");
   console.log("  rm ~/bin/oc");
@@ -577,7 +677,7 @@ function printHelp(): void {
   console.log("");
   console.log("Config:  " + CONFIG_FILE);
   console.log("Kimi:    ~/.kimi-code/config.toml         [providers.oc] base_url");
-  console.log("OpenCode: ~/.config/opencode/opencode.json  provider.oc.baseURL");
+  console.log("OpenCode: ~/.config/opencode/opencode.jsonc  provider.oc.baseURL");
 }
 
 // ── Main ────────────────────────────────────────────────
@@ -604,7 +704,7 @@ async function main(): Promise<void> {
       console.log("Unknown command: " + cmd);
       console.log("");
       printHelp();
-      process.exitCode = 1;
+      process.exit(1);
       break;
   }
 }
