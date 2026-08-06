@@ -410,34 +410,46 @@ async function cmdInit(): Promise<void> {
     return;
   }
 
-  // Step 1: wrangler login
-  console.log("  Checking wrangler auth...");
+  // Step 1: Check auth (token or wrangler)
+  console.log("  Checking authentication...");
+  const hasToken = !!process.env.CLOUDFLARE_API_TOKEN;
   let loggedIn = false;
-  try {
-    execSync("wrangler whoami", { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
+
+  if (hasToken) {
+    console.log("  ✓ CLOUDFLARE_API_TOKEN detected");
     loggedIn = true;
-    console.log("  ✓ wrangler authenticated");
-  } catch {
-    console.log("  ✗ Not authenticated");
-    console.log("");
-    console.log("  Opening browser for Cloudflare login...");
-    console.log("  Please authorize in the browser window.");
-    console.log("");
-    try {
-      execSync("wrangler login", { stdio: "inherit", timeout: 120000 });
-    } catch {
-      console.log("");
-      console.log("  ✗ Login failed. Try: wrangler login");
-      return;
-    }
-    // Verify
+  } else {
+    // Check wrangler login
     try {
       execSync("wrangler whoami", { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
-      console.log("  ✓ wrangler authenticated");
       loggedIn = true;
+      console.log("  ✓ wrangler authenticated");
     } catch {
-      console.log("  ✗ Auth verification failed");
-      return;
+      console.log("  ✗ Not authenticated");
+      console.log("");
+      console.log("  Opening browser for Cloudflare login...");
+      console.log("  Please authorize in the browser window.");
+      console.log("");
+      try {
+        execSync("wrangler login", { stdio: "inherit", timeout: 120000 });
+      } catch {
+        console.log("");
+        console.log("  ✗ Login failed.");
+        console.log("");
+        console.log("  Alternative: Use API Token");
+        console.log("    export CLOUDFLARE_API_TOKEN='your-token'");
+        console.log("    oc init");
+        return;
+      }
+      // Verify
+      try {
+        execSync("wrangler whoami", { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
+        console.log("  ✓ wrangler authenticated");
+        loggedIn = true;
+      } catch {
+        console.log("  ✗ Auth verification failed");
+        return;
+      }
     }
   }
 
