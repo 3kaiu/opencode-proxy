@@ -5,6 +5,7 @@
 // oc 通过 CF API 或 wrangler 读写 KV
 //
 // Usage:
+//   oc init               Auto-configure (just login to CF, rest is automatic)
 //   oc                    Show current endpoint + router status
 //   oc list               List all endpoints (from CF KV)
 //   oc add <name> <url>   Add an endpoint to CF KV
@@ -13,17 +14,11 @@
 //   oc test [name]        Test endpoint(s) latency
 //   oc import <file>      Import from file to CF KV
 //   oc status             Show CF router health & exhaustion
-//   oc cf-init ...        One-time Cloudflare config
 //   oc current            Show current endpoint
 //   oc help               Show this help
 //
-// Config:  ~/.oc/config.json  (仅存 CF 连接信息 + 当前选择，不存端点)
-// Kimi:    ~/.kimi-code/config.toml        [providers.oc] base_url
-// OpenCode: ~/.config/opencode/opencode.jsonc  provider.oc.baseURL
-//
-// CF Auth (二选一，oc 不存储任何凭据):
-//   1. export CLOUDFLARE_API_TOKEN="..."   (环境变量，推荐)
-//   2. wrangler login                      (OAuth，wrangler 自己管 token)
+// Privacy: oc stores NO credentials. Config only contains public worker info.
+//   CF auth is handled entirely by wrangler or CLOUDFLARE_API_TOKEN env var.
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -39,6 +34,12 @@ const KIMI_PROVIDER = "oc";
 const OPENCODE_PROVIDER = "oc";
 const KV_KEY_ENDPOINTS = "endpoints";
 
+// ── Default config (public info from repo wrangler.toml) ──
+const DEFAULT_ACCOUNT_ID = "YOUR_ACCOUNT_ID";
+const DEFAULT_KV_NAMESPACE_ID = "YOUR_KV_NAMESPACE_ID";
+const DEFAULT_WORKER_NAME = "oc-router";
+const DEFAULT_WORKER_URL = "https://YOUR_WORKER.workers.dev";
+
 // ── Types ───────────────────────────────────────────────
 interface Endpoint {
   name: string;
@@ -50,12 +51,12 @@ interface CloudflareConfig {
   accountId: string;
   kvNamespaceId: string;
   workerName: string;
-  cloudflareDir: string;
 }
 
 interface OcConfig {
   current: string | null;
   cloudflare?: CloudflareConfig;
+  endpoints?: Endpoint[];  // Legacy format for migration
 }
 
 // ── HTTP via curl (static-compatible, no fetch needed) ──
@@ -130,20 +131,34 @@ function loadConfig(): OcConfig {
       const obj = parsed as Record<string, unknown>;
       const current = typeof obj.current === "string" ? obj.current : null;
       const cf = obj.cloudflare;
+      const endpoints = obj.endpoints;
+
+      let cloudflare: CloudflareConfig | undefined;
       if (typeof cf === "object" && cf !== null) {
         const cfObj = cf as Record<string, unknown>;
-        return {
-          current,
-          cloudflare: {
-            workerUrl: String(cfObj.workerUrl || ""),
-            accountId: String(cfObj.accountId || ""),
-            kvNamespaceId: String(cfObj.kvNamespaceId || ""),
-            workerName: String(cfObj.workerName || ""),
-            cloudflareDir: String(cfObj.cloudflareDir || ""),
-          },
+        cloudflare = {
+          workerUrl: String(cfObj.workerUrl || DEFAULT_WORKER_URL),
+          accountId: String(cfObj.accountId || DEFAULT_ACCOUNT_ID),
+          kvNamespaceId: String(cfObj.kvNamespaceId || DEFAULT_KV_NAMESPACE_ID),
+          workerName: String(cfObj.workerName || DEFAULT_WORKER_NAME),
         };
       }
-      return { current };
+
+      let legacyEndpoints: Endpoint[] | undefined;
+      if (Array.isArray(endpoints)) {
+        legacyEndpoints = [];
+        for (let i = 0; i < endpoints.length; i++) {
+          const item = endpoints[i];
+          if (typeof item === "object" && item !== null) {
+            const epObj = item as Record<string, unknown>;
+            if (typeof epObj.name === "string" && typeof epObj.url === "string") {
+              legacyEndpoints.push({ name: epObj.name, url: epObj.url });
+            }
+          }
+        }
+      }
+
+      return { current, cloudflare, endpoints: legacyEndpoints };
     }
     return { current: null };
   } catch {
@@ -155,18 +170,30 @@ function saveConfig(cfg: OcConfig): void {
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
-  writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n");
+  // Privacy: only save public info, never credentials
+  const toSave: Record<string, unknown> = { current: cfg.current };
+  if (cfg.cloudflare) {
+    toSave.cloudflare = {
+      workerUrl: cfg.cloudflare.workerUrl,
+      accountId: cfg.cloudflare.accountId,
+      kvNamespaceId: cfg.cloudflare.kvNamespaceId,
+      workerName: cfg.cloudflare.workerName,
+    };
+  }
+  writeFileSync(CONFIG_FILE, JSON.stringify(toSave, null, 2) + "\n");
 }
 
 function requireCf(cfg: OcConfig): CloudflareConfig {
   if (!cfg.cloudflare) {
-    console.log("Cloudflare not configured. Run: oc cf-init");
+    console.log("Not configured. Run: oc init");
     process.exit(1);
   }
   return cfg.cloudflare;
 }
 
 // ── CF KV 读写 ──────────────────────────────────────────
+// Privacy: no credentials stored. Auth via wrangler or CLOUDFLARE_API_TOKEN env.
+
 async function kvGet(cf: CloudflareConfig, key: string): Promise<string | null> {
   const token = process.env.CLOUDFLARE_API_TOKEN;
   if (token) {
@@ -174,14 +201,11 @@ async function kvGet(cf: CloudflareConfig, key: string): Promise<string | null> 
     const res = curlGet(url, [`Authorization: Bearer ${token}`], 10_000);
     if (res.status === 404) return null;
     if (res.status >= 200 && res.status < 300) return res.body;
-    // fall through to wrangler
   }
   try {
-    const out = execSync(`wrangler kv key get ${key}`, {
-      cwd: cf.cloudflareDir,
+    const out = execSync(`wrangler kv key get ${key} --account-id ${cf.accountId}`, {
       timeout: 15_000,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: cf.accountId },
     }).toString();
     return out.trim() || null;
   } catch {
@@ -197,12 +221,10 @@ async function kvPut(cf: CloudflareConfig, key: string, value: string): Promise<
     if (res.status >= 200 && res.status < 300) return true;
   }
   try {
-    execSync(`wrangler kv key put ${key}`, {
-      cwd: cf.cloudflareDir,
+    execSync(`wrangler kv key put ${key} --account-id ${cf.accountId}`, {
       input: value,
       timeout: 15_000,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: cf.accountId },
     });
     return true;
   } catch {
@@ -244,7 +266,7 @@ async function saveEndpoints(cf: CloudflareConfig, endpoints: Endpoint[]): Promi
   if (ok) {
     console.log(`  ✓ CF KV synced (${endpoints.length} endpoints)`);
   } else {
-    console.log("  ✗ CF KV write failed. Set CLOUDFLARE_API_TOKEN or run: wrangler login");
+    console.log("  ✗ CF KV write failed. Run: wrangler login");
     process.exit(1);
   }
 }
@@ -349,6 +371,122 @@ function updateOpenCode(url: string): void {
 
 // ── Commands ────────────────────────────────────────────
 
+async function cmdInit(): Promise<void> {
+  console.log("oc init - one-step Cloudflare setup");
+  console.log("");
+
+  const cfg = loadConfig();
+
+  // Already configured?
+  if (cfg.cloudflare) {
+    console.log("  ✓ Already configured:");
+    console.log(`    Worker: ${cfg.cloudflare.workerUrl}`);
+    console.log(`    KV:     ${cfg.cloudflare.kvNamespaceId}`);
+
+    // Migrate legacy endpoints if present
+    if (cfg.endpoints && cfg.endpoints.length > 0) {
+      console.log("");
+      console.log(`  Migrating ${cfg.endpoints.length} legacy endpoints to CF KV...`);
+      const existing = await loadEndpoints(cfg.cloudflare);
+      if (existing.length === 0) {
+        await saveEndpoints(cfg.cloudflare, cfg.endpoints);
+        console.log("  ✓ Migrated to CF KV");
+      } else {
+        console.log(`  ⚠ CF KV already has ${existing.length} endpoints, skipping`);
+      }
+      cfg.endpoints = undefined;
+      saveConfig(cfg);
+    }
+
+    // Verify connectivity
+    console.log("");
+    console.log("  Verifying connection...");
+    const res = curlGet(cfg.cloudflare.workerUrl + "/health", [], 5000);
+    if (res.status === 200) {
+      console.log("  ✓ Router is reachable");
+    } else {
+      console.log("  ⚠ Router not reachable (status: " + res.status + ")");
+    }
+    return;
+  }
+
+  // Step 1: wrangler login
+  console.log("  Checking wrangler auth...");
+  let loggedIn = false;
+  try {
+    execSync("wrangler whoami", { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
+    loggedIn = true;
+    console.log("  ✓ wrangler authenticated");
+  } catch {
+    console.log("  ✗ Not authenticated");
+    console.log("");
+    console.log("  Opening browser for Cloudflare login...");
+    console.log("  Please authorize in the browser window.");
+    console.log("");
+    try {
+      execSync("wrangler login", { stdio: "inherit", timeout: 120000 });
+    } catch {
+      console.log("");
+      console.log("  ✗ Login failed. Try: wrangler login");
+      return;
+    }
+    // Verify
+    try {
+      execSync("wrangler whoami", { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
+      console.log("  ✓ wrangler authenticated");
+      loggedIn = true;
+    } catch {
+      console.log("  ✗ Auth verification failed");
+      return;
+    }
+  }
+
+  if (!loggedIn) return;
+
+  // Step 2: Save config (all defaults from repo, no user input needed)
+  console.log("");
+  console.log("  Saving config...");
+  cfg.cloudflare = {
+    workerUrl: DEFAULT_WORKER_URL,
+    accountId: DEFAULT_ACCOUNT_ID,
+    kvNamespaceId: DEFAULT_KV_NAMESPACE_ID,
+    workerName: DEFAULT_WORKER_NAME,
+  };
+  saveConfig(cfg);
+  console.log("  ✓ Config saved");
+
+  // Step 3: Migrate legacy endpoints
+  if (cfg.endpoints && cfg.endpoints.length > 0) {
+    console.log("");
+    console.log(`  Migrating ${cfg.endpoints.length} legacy endpoints...`);
+    const existing = await loadEndpoints(cfg.cloudflare);
+    if (existing.length === 0) {
+      await saveEndpoints(cfg.cloudflare, cfg.endpoints);
+      console.log("  ✓ Migrated to CF KV");
+    } else {
+      console.log(`  ⚠ CF KV already has ${existing.length} endpoints, skipping`);
+    }
+    cfg.endpoints = undefined;
+    saveConfig(cfg);
+  }
+
+  // Step 4: Verify
+  console.log("");
+  console.log("  Verifying connection...");
+  const res = curlGet(DEFAULT_WORKER_URL + "/health", [], 5000);
+  if (res.status === 200) {
+    console.log("  ✓ Router is reachable");
+  } else {
+    console.log("  ⚠ Router not reachable (status: " + res.status + ")");
+  }
+
+  console.log("");
+  console.log("  ✓ Done! You can now use:");
+  console.log("    oc list    - list endpoints");
+  console.log("    oc use <n> - switch endpoint");
+  console.log("    oc add <name> <url> - add endpoint");
+}
+
 async function cmdCurrent(): Promise<void> {
   const cfg = loadConfig();
   if (!cfg.current) {
@@ -399,7 +537,7 @@ async function cmdCurrent(): Promise<void> {
       }
     }
   } catch {
-    // 路由不可达时不干扰输出
+    // silent
   }
 }
 
@@ -604,53 +742,11 @@ async function cmdStatus(): Promise<void> {
   }
 }
 
-function cmdCfInit(args: string[]): void {
-  if (args.length < 4) {
-    console.log("Usage: oc cf-init <worker-url> <account-id> <kv-namespace-id> <cloudflare-dir>");
-    console.log("");
-    console.log("  worker-url:      Worker 公网 URL");
-    console.log("  account-id:      Dashboard URL 中的 hex ID");
-    console.log("  kv-namespace-id: KV namespace ID（wrangler.toml 中的 id）");
-    console.log("  cloudflare-dir:  本仓库 cloudflare/ 目录的绝对路径");
-    console.log("");
-    console.log("Example:");
-    console.log("  oc cf-init https://my-router.xxx.workers.dev abc123... 9a32f1... /path/to/cloudflare");
-    console.log("");
-    console.log("CF Auth (oc 不存储凭据，二选一):");
-    console.log("  export CLOUDFLARE_API_TOKEN='...'   # 环境变量");
-    console.log("  wrangler login                      # OAuth 浏览器授权");
-    return;
-  }
-  const workerUrl = args[0].replace(/\/+$/, "");
-  const hostMatch = workerUrl.match(/^https?:\/\/([^.]+)\./);
-  const workerName = hostMatch ? hostMatch[1] : "oc-router";
-
-  const cfg = loadConfig();
-  cfg.cloudflare = {
-    workerUrl,
-    accountId: args[1],
-    kvNamespaceId: args[2],
-    workerName,
-    cloudflareDir: args[3],
-  };
-  saveConfig(cfg);
-  console.log("✓ Cloudflare config saved (no credentials stored).");
-  console.log(`  Worker:     ${workerName}`);
-  console.log(`  URL:        ${workerUrl}`);
-  console.log(`  KV:         ${args[2]}`);
-  console.log(`  Dir:        ${args[3]}`);
-  console.log("");
-  console.log("CF Auth (pick one):");
-  console.log("  export CLOUDFLARE_API_TOKEN='...'");
-  console.log("  wrangler login");
-  console.log("");
-  console.log('Then run "oc add <name> <url>" to add endpoints.');
-}
-
 function printHelp(): void {
   console.log("oc - opencode proxy switcher");
   console.log("");
   console.log("Usage:");
+  console.log("  oc init               Auto-configure (just login to CF)");
   console.log("  oc                    Show current endpoint + router status");
   console.log("  oc list               List all endpoints (from CF KV)");
   console.log("  oc add <name> <url>   Add an endpoint to CF KV");
@@ -659,21 +755,18 @@ function printHelp(): void {
   console.log("  oc test [name]        Test endpoint(s) latency");
   console.log("  oc import <file>      Import from file to CF KV");
   console.log("  oc status             Show CF router health & exhaustion");
-  console.log("  oc cf-init ...        One-time Cloudflare config");
   console.log("  oc current            Show current endpoint");
   console.log("  oc help               Show this help");
   console.log("");
-  console.log("Endpoints are stored in Cloudflare KV, not locally.");
-  console.log("CF Auth (oc stores no credentials):");
-  console.log("  export CLOUDFLARE_API_TOKEN='...'   # env var, direct API");
-  console.log("  wrangler login                      # OAuth, wrangler manages token");
+  console.log("Privacy: oc stores NO credentials.");
+  console.log("  Config only contains public worker info (URL, account ID, KV ID).");
+  console.log("  CF auth is handled by wrangler or CLOUDFLARE_API_TOKEN env var.");
   console.log("");
   console.log("Install:");
   console.log("  curl -fsSL https://github.com/3kaiu/opencode-proxy/raw/main/install.sh | sh");
   console.log("");
   console.log("Uninstall:");
-  console.log("  rm ~/bin/oc");
-  console.log("  rm -rf ~/.oc");
+  console.log("  rm ~/bin/oc && rm -rf ~/.oc");
   console.log("");
   console.log("Config:  " + CONFIG_FILE);
   console.log("Kimi:    ~/.kimi-code/config.toml         [providers.oc] base_url");
@@ -687,6 +780,7 @@ async function main(): Promise<void> {
   const args = argv.slice(3);
 
   switch (cmd) {
+    case "init":    await cmdInit(); break;
     case "list":    await cmdList(); break;
     case "add":     await cmdAdd(args); break;
     case "use":     await cmdUse(args); break;
@@ -694,7 +788,6 @@ async function main(): Promise<void> {
     case "test":    await cmdTest(args); break;
     case "import":  await cmdImport(args); break;
     case "status":  await cmdStatus(); break;
-    case "cf-init": cmdCfInit(args); break;
     case "current": await cmdCurrent(); break;
     case "help":
     case "--help":
