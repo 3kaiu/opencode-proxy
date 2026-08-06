@@ -47,7 +47,7 @@ oc test [name]        # 测试端点连通性（不带 name 则测试全部）
 oc import <file>      # 从文件批量导入（自动同步到 CF Worker）
 oc sync               # 手动同步端点列表到 CF Worker
 oc status             # 查看 CF 路由健康状态和各端点耗尽情况
-oc cf-init ...        # 一次性配置 Cloudflare（不存储凭据）
+oc init ...           # 一次性配置 Cloudflare（不存储凭据）
 oc current            # 查看当前端点
 oc help               # 帮助
 ```
@@ -59,16 +59,16 @@ oc help               # 帮助
 ### 初始化
 
 ```bash
-oc cf-init <worker-url> <account-id> <cloudflare-dir>
+oc init <worker-url> <account-id> <kv-namespace-id>
 
 # 示例
-oc cf-init https://<your-worker>.workers.dev <account-id> /path/to/opencode-proxy/cloudflare [router-token]
+oc init https://<your-worker>.workers.dev <account-id> <kv-namespace-id>
 ```
 
 参数说明：
 - `worker-url`：Worker 的公网 URL（不含路径）
 - `account-id`：Dashboard URL 中的 hex ID
-- `cloudflare-dir`：本仓库 `cloudflare/` 目录的绝对路径
+- `kv-namespace-id`：用 `wrangler kv namespace create ENDPOINT_STATE` 创建后得到的 id
 
 ### 认证（oc 不存储任何凭据）
 

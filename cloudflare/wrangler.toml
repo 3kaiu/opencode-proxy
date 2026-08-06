@@ -1,8 +1,10 @@
 name = "oc-router"
 main = "worker.ts"
 compatibility_date = "2025-07-01"
-account_id = "YOUR_ACCOUNT_ID"
+# 填入你自己的 Cloudflare account ID（Dashboard URL 中的 hex ID）
+account_id = "<your-account-id>"
 
 [[kv_namespaces]]
 binding = "ENDPOINT_STATE"
-id = "YOUR_KV_NAMESPACE_ID"
+# 先创建：wrangler kv namespace create ENDPOINT_STATE，再填入返回的 id
+id = "<your-kv-namespace-id>"

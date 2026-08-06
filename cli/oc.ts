@@ -5,7 +5,7 @@
 // oc 通过 CF API 或 wrangler 读写 KV
 //
 // Usage:
-//   oc init               Auto-configure (just login to CF, rest is automatic)
+//   oc init <worker-url> <account-id> <kv-namespace-id>   One-step CF setup
 //   oc                    Show current endpoint + router status
 //   oc list               List all endpoints (from CF KV)
 //   oc add <name> <url>   Add an endpoint to CF KV
@@ -33,12 +33,6 @@ const OPENCODE_CONFIG = HOME + "/.config/opencode/opencode.jsonc";
 const KIMI_PROVIDER = "oc";
 const OPENCODE_PROVIDER = "oc";
 const KV_KEY_ENDPOINTS = "endpoints";
-
-// ── Default config (public info from repo wrangler.toml) ──
-const DEFAULT_ACCOUNT_ID = "YOUR_ACCOUNT_ID";
-const DEFAULT_KV_NAMESPACE_ID = "YOUR_KV_NAMESPACE_ID";
-const DEFAULT_WORKER_NAME = "oc-router";
-const DEFAULT_WORKER_URL = "https://YOUR_WORKER.workers.dev";
 
 // ── Types ───────────────────────────────────────────────
 interface Endpoint {
@@ -137,10 +131,10 @@ function loadConfig(): OcConfig {
       if (typeof cf === "object" && cf !== null) {
         const cfObj = cf as Record<string, unknown>;
         cloudflare = {
-          workerUrl: String(cfObj.workerUrl || DEFAULT_WORKER_URL),
-          accountId: String(cfObj.accountId || DEFAULT_ACCOUNT_ID),
-          kvNamespaceId: String(cfObj.kvNamespaceId || DEFAULT_KV_NAMESPACE_ID),
-          workerName: String(cfObj.workerName || DEFAULT_WORKER_NAME),
+          workerUrl: String(cfObj.workerUrl || ""),
+          accountId: String(cfObj.accountId || ""),
+          kvNamespaceId: String(cfObj.kvNamespaceId || ""),
+          workerName: String(cfObj.workerName || ""),
         };
       }
 
@@ -203,8 +197,8 @@ async function kvGet(cf: CloudflareConfig, key: string): Promise<string | null> 
     if (res.status >= 200 && res.status < 300) return res.body;
   }
   try {
-    const out = execSync(`wrangler kv key get ${key} --account-id ${cf.accountId}`, {
-      timeout: 15_000,
+    const out = execSync(`wrangler kv key get ${key} --namespace-id ${cf.kvNamespaceId} --remote`, {
+      timeout: 30_000,
       stdio: ["pipe", "pipe", "pipe"],
     }).toString();
     return out.trim() || null;
@@ -221,9 +215,10 @@ async function kvPut(cf: CloudflareConfig, key: string, value: string): Promise<
     if (res.status >= 200 && res.status < 300) return true;
   }
   try {
-    execSync(`wrangler kv key put ${key} --account-id ${cf.accountId}`, {
-      input: value,
-      timeout: 15_000,
+    // wrangler v4 不读 stdin，值须作为位置参数传入（shell 单引号转义），--remote 避免落到本地存储
+    const escaped = value.replace(/'/g, "'\\''");
+    execSync(`wrangler kv key put ${key} '${escaped}' --namespace-id ${cf.kvNamespaceId} --remote`, {
+      timeout: 30_000,
       stdio: ["pipe", "pipe", "pipe"],
     });
     return true;
@@ -371,7 +366,7 @@ function updateOpenCode(url: string): void {
 
 // ── Commands ────────────────────────────────────────────
 
-async function cmdInit(): Promise<void> {
+async function cmdInit(args: string[]): Promise<void> {
   console.log("oc init - one-step Cloudflare setup");
   console.log("");
 
@@ -410,6 +405,15 @@ async function cmdInit(): Promise<void> {
     return;
   }
 
+  if (args.length < 3) {
+    console.log("Usage: oc init <worker-url> <account-id> <kv-namespace-id>");
+    console.log("");
+    console.log("  worker-url       e.g. https://<your-worker>.workers.dev");
+    console.log("  account-id       hex ID from Cloudflare dashboard URL");
+    console.log("  kv-namespace-id  from: wrangler kv namespace create ENDPOINT_STATE");
+    process.exit(1);
+  }
+
   // Step 1: Check auth (token or wrangler)
   console.log("  Checking authentication...");
   const hasToken = !!process.env.CLOUDFLARE_API_TOKEN;
@@ -421,7 +425,7 @@ async function cmdInit(): Promise<void> {
   } else {
     // Check wrangler login
     try {
-      execSync("wrangler whoami", { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
+      execSync("wrangler whoami", { stdio: ["pipe", "pipe", "pipe"], timeout: 30000 });
       loggedIn = true;
       console.log("  ✓ wrangler authenticated");
     } catch {
@@ -443,7 +447,7 @@ async function cmdInit(): Promise<void> {
       }
       // Verify
       try {
-        execSync("wrangler whoami", { stdio: ["pipe", "pipe", "pipe"], timeout: 5000 });
+        execSync("wrangler whoami", { stdio: ["pipe", "pipe", "pipe"], timeout: 30000 });
         console.log("  ✓ wrangler authenticated");
         loggedIn = true;
       } catch {
@@ -455,14 +459,14 @@ async function cmdInit(): Promise<void> {
 
   if (!loggedIn) return;
 
-  // Step 2: Save config (all defaults from repo, no user input needed)
+  // Step 2: Save config (from CLI args, no hardcoded values in repo)
   console.log("");
   console.log("  Saving config...");
   cfg.cloudflare = {
-    workerUrl: DEFAULT_WORKER_URL,
-    accountId: DEFAULT_ACCOUNT_ID,
-    kvNamespaceId: DEFAULT_KV_NAMESPACE_ID,
-    workerName: DEFAULT_WORKER_NAME,
+    workerUrl: args[0],
+    accountId: args[1],
+    kvNamespaceId: args[2],
+    workerName: "oc-router",
   };
   saveConfig(cfg);
   console.log("  ✓ Config saved");
@@ -485,7 +489,7 @@ async function cmdInit(): Promise<void> {
   // Step 4: Verify
   console.log("");
   console.log("  Verifying connection...");
-  const res = curlGet(DEFAULT_WORKER_URL + "/health", [], 5000);
+  const res = curlGet(args[0] + "/health", [], 5000);
   if (res.status === 200) {
     console.log("  ✓ Router is reachable");
   } else {
@@ -758,7 +762,8 @@ function printHelp(): void {
   console.log("oc - opencode proxy switcher");
   console.log("");
   console.log("Usage:");
-  console.log("  oc init               Auto-configure (just login to CF)");
+  console.log("  oc init <worker-url> <account-id> <kv-namespace-id>");
+  console.log("                          One-step Cloudflare setup");
   console.log("  oc                    Show current endpoint + router status");
   console.log("  oc list               List all endpoints (from CF KV)");
   console.log("  oc add <name> <url>   Add an endpoint to CF KV");
@@ -792,7 +797,7 @@ async function main(): Promise<void> {
   const args = argv.slice(3);
 
   switch (cmd) {
-    case "init":    await cmdInit(); break;
+    case "init":    await cmdInit(args); break;
     case "list":    await cmdList(); break;
     case "add":     await cmdAdd(args); break;
     case "use":     await cmdUse(args); break;
