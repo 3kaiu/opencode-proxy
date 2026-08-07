@@ -1,10 +1,6 @@
-name: Build platform artifacts
+name: Build and release platform artifacts
 
-# 平台层构建管线：源码（shared/proxy.ts + platform/*.ts）变更时，
-# 用 esbuild 产出各平台单文件部署产物并提交回 main。
-# 各平台（Vercel/Netlify/Deno Deploy/Supabase）从 git 直接部署产物，平台侧不做任何 build。
-#
-# 产物提交只改 api/proxy.js 等文件，不匹配下方 paths，不会触发本 workflow 死循环。
+# 构建产物发布到 GitHub Release，各平台从 Release 下载部署，不在主仓库存储产物。
 
 on:
   push:
@@ -36,14 +32,15 @@ jobs:
       - name: Build artifacts
         run: node scripts/build.mjs
 
-      - name: Commit artifacts
-        run: |
-          if git diff --quiet && git diff --cached --quiet; then
-            echo "No artifact changes."
-            exit 0
-          fi
-          git config user.name "opencode-proxy bot"
-          git config user.email "bot@users.noreply.github.com"
-          git add api/proxy.js netlify/edge-functions/proxy.js deno/main.js supabase/functions/proxy/index.js
-          git commit -m "chore: rebuild platform artifacts"
-          git push origin main
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: platform-latest
+          name: Platform artifacts (latest)
+          draft: false
+          prerelease: false
+          files: |
+            api/proxy.js
+            netlify/edge-functions/proxy.js
+            deno/main.js
+            supabase/functions/proxy/index.js

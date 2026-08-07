@@ -5,6 +5,10 @@ node_modules/
 dist/
 build/
 target/
+api/proxy.js
+netlify/edge-functions/proxy.js
+deno/main.js
+supabase/functions/proxy/index.js
 
 # Lock files
 package-lock.json
