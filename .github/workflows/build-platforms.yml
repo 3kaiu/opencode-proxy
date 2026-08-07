@@ -1,0 +1,49 @@
+name: Build platform artifacts
+
+# 平台层构建管线：源码（shared/proxy.ts + platform/*.ts）变更时，
+# 用 esbuild 产出各平台单文件部署产物并提交回 main。
+# 各平台（Vercel/Netlify/Deno Deploy/Supabase）从 git 直接部署产物，平台侧不做任何 build。
+#
+# 产物提交只改 api/proxy.js 等文件，不匹配下方 paths，不会触发本 workflow 死循环。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "shared/**"
+      - "platform/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install deps
+        run: npm install
+
+      - name: Build artifacts
+        run: node scripts/build.mjs
+
+      - name: Commit artifacts
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No artifact changes."
+            exit 0
+          fi
+          git config user.name "opencode-proxy bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add api/proxy.js netlify/edge-functions/proxy.js deno/main.js supabase/functions/proxy/index.js
+          git commit -m "chore: rebuild platform artifacts"
+          git push origin main
