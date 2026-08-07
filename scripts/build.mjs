@@ -60,7 +60,10 @@ for (const t of targets) {
       sourcemap: false,
       platform: t.platform,
       format: t.format,
-      target: t.target,
+      target: "esnext",
+      treeShaking: true,
+      drop: ["console", "debugger"],
+      legalComments: "none",
       banner: { js: BANNER },
       logLevel: "warning",
     })
