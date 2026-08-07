@@ -274,18 +274,19 @@ function discoverOpenCodeConfigs(): string[] {
 }
 
 // scriptc static builds silently drop nested property assignment on JSON.parse
-// results, so opencode configs are edited as text: parse first to validate,
-// then splice the baseURL value with string operations only.
-function updateSingleOpenCode(configPath: string, url: string): boolean {
+// results, so opencode config files are edited as raw: parse first to validate,
+// then splice the string value in. Returns "updated"/"unchanged"/"failed" so
+// callers can tell a real parse error apart from "already on the right URL".
+function updateSingleOpenCode(configPath: string, url: string): "updated" | "unchanged" | "failed" {
   try {
     const original = readFileSync(configPath, "utf8");
-    if (!parseJsonc(original)) return false;
+    if (!parseJsonc(original)) return "failed";
     const next = editOpenCodeConfig(original, url);
-    if (next === original) return false;
+    if (next === original) return "unchanged";
     writeFileSync(configPath, next);
-    return true;
+    return "updated";
   } catch {
-    return false;
+    return "failed";
   }
 }
 
@@ -388,7 +389,7 @@ function insertBeforeRootClose(text: string, chunk: string): string {
 
 function editOpenCodeConfig(text: string, url: string): string {
   const ocEntry =
-    '"oc": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "oc proxy",\n      "options": { "baseURL": "' + url + '" }\n    }';
+    '"oc": {\n      "npm": "@ai-sdk/openai",\n      "name": "oc proxy",\n      "options": { "baseURL": "' + url + '" }\n    }';
   const providerIdx = findKey(text, "provider", 0);
   if (providerIdx === -1) {
     const rootOpen = text.indexOf("{");
@@ -427,15 +428,25 @@ function editOpenCodeConfig(text: string, url: string): string {
 function updateOpenCode(url: string): void {
   const configs = discoverOpenCodeConfigs();
   let updated = 0;
+  let unchanged = 0;
+  let failed = 0;
   for (const configPath of configs) {
-    if (updateSingleOpenCode(configPath, url)) updated++;
+    const result = updateSingleOpenCode(configPath, url);
+    if (result === "updated") updated++;
+    else if (result === "unchanged") unchanged++;
+    else failed++;
   }
   if (updated > 0) {
     log(true, "OpenCode -> updated " + updated + " config(s)");
+    if (unchanged > 0) log(false, "  " + unchanged + " config(s) already up to date");
+    return;
+  }
+  if (configs.length > 0 && unchanged === configs.length) {
+    log(true, "OpenCode -> up to date (" + unchanged + " config(s))");
     return;
   }
   if (configs.length > 0) {
-    log(false, "OpenCode -> skipped (existing configs not parseable)");
+    log(false, "OpenCode -> skipped (" + failed + " config(s) not parseable)");
     return;
   }
   if (!(cmdExists("opencode") || existsSync(HOME + "/.opencode"))) {
@@ -446,7 +457,7 @@ function updateOpenCode(url: string): void {
   mkdirSync(dirname(defaultPath), { recursive: true });
   writeFileSync(
     defaultPath,
-    JSON.stringify({ provider: { [PROVIDER]: { npm: "@ai-sdk/openai-compatible", name: "oc proxy", options: { baseURL: url } } } }, null, 2) + "\n",
+    JSON.stringify({ provider: { [PROVIDER]: { npm: "@ai-sdk/openai", name: "oc proxy", options: { baseURL: url } } } }, null, 2) + "\n",
   );
   log(true, "OpenCode -> created provider." + PROVIDER);
 }

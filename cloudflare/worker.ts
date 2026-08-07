@@ -31,8 +31,11 @@
 //   2. KV 写合并节流：耗尽标记 coalesce 到模块级状态 + 1.5s 节流落盘，
 //      规避 KV 同 key 1 次/秒写入限制与多请求互相覆盖丢数据
 //   3. 错误契约对齐 opencode：429 全耗尽时同时回 Retry-After + retry-after-ms
-//      （客户端精确等待后重试）；/responses /messages 等不支持的路径
-//      直接回 404 带引导文案（客户端不重试，用户即时可见）
+//      （客户端精确等待后重试）；/responses 以外旧格式（chat/completions、
+//      messages）不再支持，回 404 带引导文案（客户端不重试，用户即时可见）
+
+import { EgressPool } from "../egress/pool"
+import type { EgressConfig } from "../egress/pool"
 
 interface Env {
   ENDPOINT_STATE: KVNamespace
@@ -54,6 +57,10 @@ interface HealthEntry {
 }
 
 const FIRST_BYTE_TIMEOUT_MS = 15_000
+
+// 决策层持有的最终上游地址。改上游 host 只需改这里（+ shared/proxy.ts 的 allowlist）。
+// 通过 x-proxy-target 头透传给各平台，平台零配置纯转发。
+const UPSTREAM_TARGET = "https://opencode.ai"
 const DEFAULT_EXHAUST_TTL = 30 * 60
 const MIN_RETRY_AFTER = 30
 const COOLDOWN_MS = 30_000
@@ -64,6 +71,7 @@ const PROBE_THRESHOLD_RATIO = 0.5
 const PROBE_PROBABILITY = 0.05
 const KV_KEY_ENDPOINTS = "endpoints"
 const KV_KEY_EXHAUSTED = "exhausted"
+const KV_KEY_EGRESS = "egress"
 
 // Sticky 会话路由参数
 const STICKY_TTL_MS = 30 * 60_000 // 会话固定关系 30min 无活跃后过期
@@ -353,13 +361,77 @@ function noEndpointsError(): Response {
   })
 }
 
-/** opencode 客户端默认 small_model=gpt-5-nano 走 /responses，free 端点不支持 → 404 引导 */
+/** Anthropic 格式端点当前无免费模型支持 → 404 引导 */
 function unsupportedPathError(path: string): Response {
   return new Response(
     JSON.stringify({
-      error: `Unsupported path: ${path}. This worker proxies the chat/completions (OpenAI-compatible) API for opencode free models. Set small_model to a free chat model (e.g. deepseek-v4-flash-free) in opencode config.`,
+      error: `Unsupported path: ${path}. This worker proxies the OpenAI Responses API (/responses) for opencode free models. Use a free model like deepseek-v4-flash-free in opencode config.`,
     }),
     { status: 404, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } },
+  )
+}
+
+/**
+ * `/responses` 的 SSE 流字段补齐。
+ * 上游 opencode.ai 的 Responses 事件格式简陋，缺失字段会导致 AI SDK
+ * （@ai-sdk/openai v2+）的 zod chunk 校验失败、文本丢失：
+ *   - response.output_text.delta 缺 item_id（SDK 硬性要求）
+ *   - response.completed / created 缺 created_at（时间戳）
+ * 逐行解析并按需补字段后原样重发。
+ */
+function transformResponsesStream(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+  let buffer = ""
+  return body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        buffer += decoder.decode(chunk, { stream: true })
+        for (;;) {
+          const newline = buffer.indexOf("\n")
+          if (newline === -1) break
+          let line = buffer.slice(0, newline)
+          buffer = buffer.slice(newline + 1)
+          if (line.endsWith("\r")) line = line.slice(0, -1)
+          if (!line.startsWith("data: ")) {
+            controller.enqueue(encoder.encode(line + "\n"))
+            continue
+          }
+          const raw = line.slice(6)
+          if (raw === "[DONE]") {
+            controller.enqueue(encoder.encode(line + "\n"))
+            continue
+          }
+          try {
+            const obj = JSON.parse(raw)
+            if (obj && typeof obj === "object") {
+              const now = Math.floor(Date.now() / 1000)
+              if (obj.type === "response.output_text.delta") {
+                if (!obj.item_id) obj.item_id = obj.id
+              } else if (obj.type === "response.output_item.created") {
+                if (obj.item && !obj.item.id) obj.item.id = "msg_" + now
+              } else if (
+                obj.type === "response.completed" ||
+                obj.type === "response.created" ||
+                obj.type === "response.incomplete"
+              ) {
+                if (!obj.response || typeof obj.response !== "object") obj.response = {}
+                if (!obj.response.id) obj.response.id = obj.id
+                if (obj.response.created_at == null) obj.response.created_at = now
+              }
+              controller.enqueue(encoder.encode("data: " + JSON.stringify(obj) + "\n"))
+              continue
+            }
+          } catch {
+            // 不合法 JSON 行：原样透传
+          }
+          controller.enqueue(encoder.encode(line + "\n"))
+        }
+      },
+      flush(controller) {
+        if (buffer) controller.enqueue(encoder.encode(buffer))
+      },
+    }),
   )
 }
 
@@ -402,9 +474,9 @@ export default {
       })
     }
 
-    // opencode 客户端默认 small_model=gpt-5-nano 会打 /responses，free 端点不支持，
-    // 直接 404 引导（客户端对 404 不重试，用户即时可见）
-    if (url.pathname === "/zen/v1/responses" || url.pathname === "/zen/v1/messages") {
+    // 只保留 /responses（OpenAI Responses API，SDK 走 @ai-sdk/openai）。
+    // /chat/completions、/messages 等旧格式不再支持，404 引导
+    if (url.pathname === "/zen/v1/messages" || url.pathname === "/zen/v1/chat/completions") {
       return unsupportedPathError(url.pathname)
     }
 
@@ -437,6 +509,8 @@ export default {
     }
     forwardHeaders.set("Content-Type", request.headers.get("Content-Type") || "application/json")
     forwardHeaders.set("Authorization", "Bearer ")
+    // 决策层把最终上游目标透传给平台；平台只做校验+转发，不持有 host 配置
+    forwardHeaders.set("x-proxy-target", UPSTREAM_TARGET + url.pathname + url.search)
 
     // ── 核心路由：健康分级 → 会话固定 → 跳过已耗尽 → 依次尝试 → 429 内部吸收 ──
     const sessionId = getSessionId(request)
@@ -519,11 +593,16 @@ export default {
         if (skippedExhausted > 0 || triedCount > 1) {
           responseHeaders.set("X-Router-Retries", String(triedCount - 1))
         }
-        return new Response(res.body, {
-          status: res.status,
-          statusText: res.statusText,
-          headers: responseHeaders,
-        })
+        return new Response(
+          suffix === "/responses" && res.body
+            ? transformResponsesStream(res.body)
+            : res.body,
+          {
+            status: res.status,
+            statusText: res.statusText,
+            headers: responseHeaders,
+          },
+        )
       } catch {
         // 网络错误 / 超时 — 冷却该端点，不标记耗尽，继续试下一个
         recordFailure(ep.name)
