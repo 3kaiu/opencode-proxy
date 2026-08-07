@@ -1,44 +1,39 @@
 use spin_sdk::http::{Request, Response, ResponseBuilder, Method};
 use spin_sdk::http_component;
 
-const TARGET_HOST: &str = "https://opencode.ai";
+const DEFAULT_TARGET_HOST: &str = "https://opencode.ai";
+const HEADER_TARGET: &str = "x-proxy-target";
+const ALLOWED_TARGET_HOSTS: &[&str] = &["opencode.ai"];
+const VERSION: &str = "2.0.0";
 
-const USER_AGENTS: &[&str] = &[
-    "opencode/latest/0.0.50/cli",
-    "opencode/latest/0.0.51/cli",
-    "opencode/latest/0.0.52/cli",
-    "opencode/latest/0.0.53/cli",
-    "opencode/latest/0.0.54/cli",
-    "opencode/latest/0.0.55/cli",
-];
+/// 与 shared/proxy.ts 对齐的白名单校验：
+/// 仅当 header 存在、为 https、host 匹配白名单时信任，否则回退默认 host。
+/// 返回完整目标 URL（含 path/query），由 CF 控制层透传。
+fn resolve_proxy_target(req: &Request) -> Option<String> {
+    for (key, value) in req.headers() {
+        if key.eq_ignore_ascii_case(HEADER_TARGET) {
+            let raw = value.as_str()?;
+            if !raw.starts_with("https://") {
+                return None;
+            }
+            // 提取 host（截掉 scheme 与 path）
+            let rest = &raw[8..];
+            let host = rest.split('/').next().unwrap_or("");
+            let host = host.split(':').next().unwrap_or("");
+            let allowed = ALLOWED_TARGET_HOSTS
+                .iter()
+                .any(|a| host == *a || host.ends_with(&format!(".{}", a)));
+            if allowed {
+                return Some(raw.to_string());
+            }
+        }
+    }
+    None
+}
 
 /// 只代理 API 路径，拒绝官网静态资源，避免烧调用量
 fn is_api_path(path: &str) -> bool {
     path.starts_with("/zen/") || path.starts_with("/v1/")
-}
-
-// WASM 环境无 crypto.getRandomValues()，spin-sdk v5 不暴露随机 API。
-// 用 AtomicU64 round-robin / LCG 代替。X-Random-ID 仅为辅助链路多样性，
-// Fermyon 是 10 个端点中额度最小的（10 万次/月），确定性序列的实际风险极低。
-// 若需真随机可引入 getrandom crate（wasm32-wasip1 target）。
-fn random_user_agent() -> &'static str {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let idx = (COUNTER.fetch_add(1, Ordering::Relaxed) as usize) % USER_AGENTS.len();
-    USER_AGENTS[idx]
-}
-
-fn random_hex(len: usize) -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0xdeadbeef);
-    let mut result = String::with_capacity(len * 2);
-    let mut val = COUNTER.fetch_add(1, Ordering::Relaxed);
-    for _ in 0..len {
-        let byte = (val & 0xff) as u8;
-        result.push_str(&format!("{:02x}", byte));
-        val = val.wrapping_mul(1103515245).wrapping_add(12345);
-    }
-    result
 }
 
 fn cors_headers() -> Vec<(String, String)> {
@@ -48,6 +43,12 @@ fn cors_headers() -> Vec<(String, String)> {
         ("Access-Control-Allow-Headers".into(), "*".into()),
         ("Access-Control-Max-Age".into(), "86400".into()),
     ]
+}
+
+fn json_response(status: u16, body: &str) -> Response {
+    let mut h = cors_headers();
+    h.push(("Content-Type".into(), "application/json".into()));
+    ResponseBuilder::new(status).headers(h).body(body.as_bytes().to_vec()).build()
 }
 
 #[http_component]
@@ -61,12 +62,7 @@ async fn handle_request(req: Request) -> Response {
     }
 
     if req.method() != &Method::Get && req.method() != &Method::Post {
-        let mut h = cors_headers();
-        h.push(("Content-Type".into(), "application/json".into()));
-        return ResponseBuilder::new(405)
-            .headers(h)
-            .body(br#"{"error":"Only GET and POST allowed"}"#.to_vec())
-            .build();
+        return json_response(405, r#"{"error":"Only GET and POST allowed"}"#);
     }
 
     let uri = req.uri();
@@ -91,28 +87,38 @@ async fn handle_request(req: Request) -> Response {
 
     // Health check
     if pathname == "/health" || pathname == "/health/" {
-        let mut h = cors_headers();
-        h.push(("Content-Type".into(), "application/json".into()));
-        return ResponseBuilder::new(200)
-            .headers(h)
-            .body(br#"{"status":"ok","version":"1.3.0","platform":"fermyon"}"#.to_vec())
-            .build();
+        return json_response(
+            200,
+            &format!(
+                r#"{{"status":"ok","version":"{}","platform":"fermyon","noCache":true,"headers":{{"Cache-Control":"no-store"}}}}"#,
+                VERSION
+            ),
+        );
+    }
+
+    // Diagnosis: Fermyon 出站被白名单限制为仅 opencode.ai，无法探测外部 IP。
+    if pathname == "/diagnose" || pathname == "/diagnose/" {
+        return json_response(
+            200,
+            &format!(
+                r#"{{"platform":"fermyon","version":"{}","ipv4":null,"ipv6":null}}"#,
+                VERSION
+            ),
+        );
     }
 
     // 非 API 路径直接 404，不转发到上游
     if !is_api_path(pathname) {
-        let mut h = cors_headers();
-        h.push(("Content-Type".into(), "application/json".into()));
-        return ResponseBuilder::new(404)
-            .headers(h)
-            .body(br#"{"error":"Not found"}"#.to_vec())
-            .build();
+        return json_response(404, r#"{"error":"Not found"}"#);
     }
 
-    // Build target URL
-    let target = format!("{}{}", TARGET_HOST, path_and_query);
+    // Build target URL: trust x-proxy-target if allowlisted, else default host.
+    let target = match resolve_proxy_target(&req) {
+        Some(t) => t,
+        None => format!("{}{}", DEFAULT_TARGET_HOST, path_and_query),
+    };
 
-    // Build forwarded headers
+    // Build forwarded headers: 纯透传，只带 opencode 作用域与鉴权头（无指纹伪装）
     let mut headers: Vec<(String, String)> = Vec::new();
     for (key, value) in req.headers() {
         let lower = key.to_lowercase();
@@ -122,8 +128,6 @@ async fn handle_request(req: Request) -> Response {
             }
         }
     }
-    headers.push(("User-Agent".into(), random_user_agent().to_string()));
-    headers.push(("X-Random-ID".into(), random_hex(8)));
     let ct = req
         .header("content-type")
         .and_then(|v| v.as_str())
@@ -157,14 +161,6 @@ async fn handle_request(req: Request) -> Response {
                 .body(body)
                 .build()
         }
-        Err(e) => {
-            let body = format!(r#"{{"error":"proxy failed: {}"}}"#, e);
-            let mut h = cors_headers();
-            h.push(("Content-Type".into(), "application/json".into()));
-            ResponseBuilder::new(502)
-                .headers(h)
-                .body(body.into_bytes())
-                .build()
-        }
+        Err(e) => json_response(502, &format!(r#"{{"error":"proxy failed: {}"}}"#, e)),
     }
 }
