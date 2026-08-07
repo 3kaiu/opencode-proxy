@@ -56,7 +56,7 @@ for (const t of targets) {
       entryPoints: [t.entry],
       outfile: t.outfile,
       bundle: true,
-      minify: false,
+      minify: true,
       sourcemap: false,
       platform: t.platform,
       format: t.format,
