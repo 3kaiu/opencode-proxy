@@ -330,7 +330,7 @@ function insertBeforeRootClose(text: string, chunk: string): string {
 
 function editOpenCodeConfig(text: string, url: string): string {
   const ocEntry =
-    '"oc": {\n      "npm": "@ai-sdk/openai",\n      "name": "oc proxy",\n      "options": { "baseURL": "' + url + '" }\n    }';
+    '"oc": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "oc proxy",\n      "options": { "baseURL": "' + url + '" }\n    }';
   const providerIdx = findKey(text, "provider", 0);
   if (providerIdx === -1) {
     const rootOpen = text.indexOf("{");
@@ -364,6 +364,30 @@ function editOpenCodeConfig(text: string, url: string): string {
   }
   const chunk = (isEmptyBlock(text, ocBody, ocEnd) ? "" : ",\n      ") + '"options": { "baseURL": "' + url + '" }';
   return text.slice(0, ocEnd) + chunk + text.slice(ocEnd);
+}
+
+// Update the base_url of [providers.oc] in kimi's TOML config. Plain-text
+// splice: match the section between "[providers.oc]" and the next "[".
+function updateKimi(url: string): "updated" | "unchanged" | "failed" | "missing" {
+  const file = HOME + "/.kimi-code/config.toml";
+  if (!existsSync(file)) return "missing";
+  try {
+    const original = readFileSync(file, "utf8");
+    const sectionIdx = original.indexOf("[providers.oc]");
+    if (sectionIdx === -1) return "missing";
+    const nextIdx = original.indexOf("\n[", sectionIdx + 14);
+    const sectionEnd = nextIdx === -1 ? original.length : nextIdx;
+    const section = original.slice(sectionIdx, sectionEnd);
+    const lineRe = /^base_url\s*=\s*"[^"]*"/m;
+    const next = lineRe.test(section)
+      ? section.replace(lineRe, 'base_url = "' + url + '"')
+      : section.replace(/\s*$/, '\nbase_url = "' + url + '"');
+    if (next === section) return "unchanged";
+    writeFileSync(file, original.slice(0, sectionIdx) + next + original.slice(sectionEnd));
+    return "updated";
+  } catch {
+    return "failed";
+  }
 }
 
 function updateOpenCode(url: string): void {
@@ -465,6 +489,11 @@ function cmdUse(args: string[]): void {
   console.log("URL:          " + ep.url);
   console.log("");
   updateOpenCode(ep.url);
+  const kimiResult = updateKimi(ep.url);
+  if (kimiResult === "updated") log(true, "Kimi   -> updated ~/.kimi-code/config.toml");
+  else if (kimiResult === "unchanged") log(true, "Kimi   -> up to date");
+  else if (kimiResult === "missing") log(false, "Kimi   -> skipped (no [providers.oc] in ~/.kimi-code/config.toml)");
+  else log(false, "Kimi   -> failed to parse ~/.kimi-code/config.toml");
   cfg.current = ep.name;
   saveConfig(cfg);
   console.log("");
@@ -555,7 +584,7 @@ function printHelp(): void {
   console.log("  oc                    Show current endpoint");
   console.log("  oc list               List all endpoints");
   console.log("  oc add NAME URL       Add an endpoint");
-  console.log("  oc use NAME           Switch client configs to an endpoint");
+  console.log("  oc use NAME           Switch client configs (opencode + kimi) to an endpoint");
   console.log("  oc del NAME           Delete an endpoint");
   console.log("  oc test [NAME]        Check endpoint reachability");
   console.log("  oc current            Show current endpoint");
@@ -564,6 +593,7 @@ function printHelp(): void {
   console.log("");
   console.log("Config:  " + CONFIG_FILE);
   console.log("OpenCode: ~/.config/opencode/opencode.json(c) / ~/.opencode / 项目级 .opencode 与 opencode.json(c)");
+  console.log("Kimi:     ~/.kimi-code/config.toml ([providers.oc])");
   console.log("");
   console.log("Install:");
   console.log("  curl -fsSL https://github.com/3kaiu/opencode-proxy/raw/main/install.sh | sh");

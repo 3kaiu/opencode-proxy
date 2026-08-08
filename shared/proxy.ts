@@ -50,6 +50,40 @@ function makeForwardHeaders(request: Request): Headers {
   return headers
 }
 
+// 占位 apiKey 判定: 官方对 Bearer dummy / 空 key 返回 401/报错,
+// 转发前剥离, 让官方按未认证的免费模型处理
+const PLACEHOLDER_AUTH = /^(Bearer\s+)?(dummy|placeholder|sk-dummy|test|x|empty)$/i
+
+function stripPlaceholderAuth(headers: Headers): Headers {
+  const auth = headers.get("authorization")
+  if (!auth) return headers
+  const token = auth.replace(/^Bearer\s+/i, "").trim()
+  if (token === "" || PLACEHOLDER_AUTH.test(token)) {
+    headers.delete("authorization")
+  }
+  return headers
+}
+
+// 响应压缩: 官方返回明文 SSE/JSON, 客户端接受 gzip 时在出口压缩, 省下行带宽
+// 运行时不提供 CompressionStream(如 Wasmer WinterJS)时跳过压缩, 保证可用性
+function maybeCompressResponse(request: Request, response: Response): Response {
+  if (typeof CompressionStream === "undefined") return response
+  const acceptEncoding = (request.headers.get("accept-encoding") || "").toLowerCase()
+  if (!acceptEncoding.includes("gzip")) return response
+  if (response.headers.get("content-encoding")) return response
+  const contentType = response.headers.get("content-type") || ""
+  if (!/text\/|application\/json|event-stream|javascript/i.test(contentType)) return response
+
+  const headers = new Headers(response.headers)
+  headers.set("content-encoding", "gzip")
+  const vary = headers.get("vary")
+  headers.set("vary", vary ? vary + ", accept-encoding" : "accept-encoding")
+  headers.delete("content-length")
+
+  const body = response.body ? response.body.pipeThrough(new CompressionStream("gzip")) : null
+  return new Response(body, { status: response.status, statusText: response.statusText, headers })
+}
+
 interface PlatformInfo {
   platform: string
   version?: string
@@ -87,20 +121,22 @@ export async function handlePlatformRequest(
   }
 
   const url = new URL(request.url)
-  const target = resolveTarget(request) ?? DEFAULT_TARGET + url.pathname + url.search
+  // 用剥离后的 pathname 构造上游 target：平台挂载前缀（如 Supabase /proxy-1）不能透传给官方
+  const target = resolveTarget(request) ?? DEFAULT_TARGET + pathname + url.search
   const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer()
 
-  const headers = makeForwardHeaders(request)
+  const headers = stripPlaceholderAuth(makeForwardHeaders(request))
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
-    return await fetch(target, {
+    const response = await fetch(target, {
       method: request.method,
       headers,
       body,
       signal: controller.signal,
     })
+    return maybeCompressResponse(request, response)
   } finally {
     clearTimeout(timer)
   }

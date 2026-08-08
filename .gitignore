@@ -25,3 +25,12 @@ cloudflare/.wrangler/
 # Wrangler local state
 .wrangler/
 captures/
+captures-cf/
+
+# Platform build artifacts (deployed from GitHub Release, not committed)
+fermyon/
+wasmer/
+valtown/
+supabase/functions/proxy-1/
+supabase/functions/proxy-2/
+supabase/functions/proxy-3/

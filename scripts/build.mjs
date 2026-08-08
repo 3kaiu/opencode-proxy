@@ -43,8 +43,29 @@ const targets = [
   },
   {
     entry: "platform/supabase.ts",
-    outfile: "supabase/functions/proxy/index.js",
+    outfile: "supabase/functions/proxy/index.ts", // Supabase Functions 入口必须 .ts
     platform: "neutral",
+    format: "esm",
+    target: "es2022",
+  },
+  {
+    entry: "platform/wasmer.ts",
+    outfile: "wasmer/src/index.js",
+    platform: "browser", // Wasmer Edge + WinterJS（WinterCG fetch 事件）
+    format: "esm",
+    target: "es2022",
+  },
+  {
+    entry: "platform/fermyon.ts",
+    outfile: "fermyon/src/index.js",
+    platform: "browser", // Fermyon Cloud + Spin JS（StarlingMonkey，WinterCG fetch 事件）
+    format: "esm",
+    target: "es2022",
+  },
+  {
+    entry: "platform/valtown.ts",
+    outfile: "valtown/index.ts",
+    platform: "neutral", // Val Town：Deno 兼容运行时（export default http handler）
     format: "esm",
     target: "es2022",
   },

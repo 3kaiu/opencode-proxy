@@ -1,9 +1,8 @@
 name = "oc-router"
 main = "dist/worker.js"
 compatibility_date = "2025-07-01"
-# account_id and kv namespace id should be provided via environment variables or CLI flags during deployment
-# account_id = "your-account-id"
+account_id = "c93e250ae22b0e504fe9b311ae41422c"
 
 [[kv_namespaces]]
 binding = "ENDPOINT_STATE"
-# id = "your-kv-namespace-id"
+id = "a1707a035cfd49d88c6bb2315e3739a6"
