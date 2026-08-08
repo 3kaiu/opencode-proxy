@@ -2,14 +2,13 @@
 // Build: scriptc build cli/oc.ts -o cli/oc
 //
 // 端点列表存储在本地 ~/.oc/config.json（不存任何凭据）
-// oc use 切换时自动更新已安装的 agent（kimi-code / opencode）配置
-// 如果 agent 未安装则跳过，如果已安装但没有 oc 供应商段，自动创建
+// oc use 切换时自动更新本地的 opencode 配置（全局 + 项目级发现）
 //
 // Usage:
 //   oc                    Show current endpoint
 //   oc list               List all endpoints
 //   oc add NAME URL       Add an endpoint
-//   oc use NAME           Switch client configs to an endpoint
+//   oc use NAME           Switch opencode config to an endpoint
 //   oc del NAME           Delete an endpoint
 //   oc test [NAME]        Check endpoint reachability (all if NAME omitted)
 //   oc current            Show current endpoint
@@ -23,10 +22,7 @@ import { dirname, join } from "node:path";
 
 const HOME = homedir();
 const CONFIG_FILE = HOME + "/.oc/config.json";
-const KIMI_CONFIG = HOME + "/.kimi-code/config.toml";
 const PROVIDER = "oc";
-const KIMI_SECTION = "[providers." + PROVIDER + "]";
-const KIMI_HEADER = KIMI_SECTION + '\ntype = "openai"\nbase_url = "';
 
 // ── Types ───────────────────────────────────────────────
 
@@ -187,68 +183,12 @@ function findEndpoint(endpoints: Endpoint[], name: string): Endpoint | null {
   return null;
 }
 
-// ── Update Kimi Code config.toml ────────────────────────
-
-function kimiInstalled(): boolean {
-  return (
-    existsSync(HOME + "/.kimi-code") ||
-    cmdExists("kimi") ||
-    cmdExists("kimi-code") ||
-    cmdExists("kimi-cli")
-  );
-}
-
-function updateKimi(url: string): void {
-  if (!existsSync(KIMI_CONFIG)) {
-    if (!kimiInstalled()) {
-      log(false, "Kimi Code -> skipped (not installed)");
-      return;
-    }
-    mkdirSync(dirname(KIMI_CONFIG), { recursive: true });
-    writeFileSync(KIMI_CONFIG, KIMI_HEADER + url + '"\n');
-    log(true, "Kimi Code -> created [" + PROVIDER + "]");
-    return;
-  }
-
-  const before = readFileSync(KIMI_CONFIG, "utf8");
-  const start = before.indexOf(KIMI_SECTION);
-  if (start === -1) {
-    writeFileSync(KIMI_CONFIG, before + "\n" + KIMI_HEADER + url + '"\n');
-    log(true, "Kimi Code -> created [" + PROVIDER + "]");
-    return;
-  }
-
-  const nextSection = before.indexOf("\n[", start + KIMI_SECTION.length);
-  const rangeEnd = nextSection === -1 ? before.length : nextSection;
-  const section = before.slice(start, rangeEnd);
-  const next = setBaseUrl(section, url);
-  writeFileSync(KIMI_CONFIG, before.slice(0, start) + next + before.slice(rangeEnd));
-  log(true, "Kimi Code -> updated [" + PROVIDER + "]");
-}
-
-// Set base_url inside the [providers.oc] section; insert it after the header
-// line when the section has none. Pure string ops (scriptc static build has no
-// regex engine for .replace).
-function setBaseUrl(section: string, url: string): string {
-  const key = 'base_url = "';
-  const keyIdx = section.indexOf(key);
-  if (keyIdx === -1) {
-    const headerIdx = section.indexOf(KIMI_SECTION);
-    if (headerIdx === -1) return section;
-    const insertAt = headerIdx + KIMI_SECTION.length;
-    return section.slice(0, insertAt) + "\n" + key + url + '"' + section.slice(insertAt);
-  }
-  const quoteStart = keyIdx + key.length;
-  const quoteEnd = section.indexOf('"', quoteStart);
-  if (quoteEnd === -1) return section;
-  return section.slice(0, quoteStart) + url + section.slice(quoteEnd);
-}
-
 // ── Update OpenCode configs ─────────────────────────────
 
 // Discover existing opencode config files: global config dir, ~/.opencode,
-// then project-local .opencode dirs walking up from cwd. opencode.jsonc is
-// loaded after opencode.json, so when both exist the jsonc baseURL wins.
+// then project-level opencode.json(c) in cwd and parent dirs, plus .opencode/
+// dirs walking up from cwd. opencode.jsonc is loaded after opencode.json,
+// so when both exist the jsonc baseURL wins.
 function discoverOpenCodeConfigs(): string[] {
   const result: string[] = [];
   const seen: string[] = [];
@@ -265,6 +205,7 @@ function discoverOpenCodeConfigs(): string[] {
   consider(HOME + "/.opencode");
   let dir = process.cwd();
   while (true) {
+    consider(dir);
     consider(join(dir, ".opencode"));
     const parent = dirname(dir);
     if (parent === dir || dir === HOME) break;
@@ -523,7 +464,6 @@ function cmdUse(args: string[]): void {
   console.log("Switching to: " + ep.name);
   console.log("URL:          " + ep.url);
   console.log("");
-  updateKimi(ep.url);
   updateOpenCode(ep.url);
   cfg.current = ep.name;
   saveConfig(cfg);
@@ -623,8 +563,7 @@ function printHelp(): void {
   console.log("  oc help               Show this help");
   console.log("");
   console.log("Config:  " + CONFIG_FILE);
-  console.log("Kimi:    ~/.kimi-code/config.toml");
-  console.log("OpenCode: ~/.config/opencode/opencode.jsonc");
+  console.log("OpenCode: ~/.config/opencode/opencode.json(c) / ~/.opencode / 项目级 .opencode 与 opencode.json(c)");
   console.log("");
   console.log("Install:");
   console.log("  curl -fsSL https://github.com/3kaiu/opencode-proxy/raw/main/install.sh | sh");

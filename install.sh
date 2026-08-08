@@ -152,11 +152,16 @@ main() {
     echo "Installing oc (opencode proxy switcher)..."
     echo ""
 
-    # Detect platform
+# Detect platform
     local os arch
     os="$(detect_os)"
     arch="$(detect_arch)"
     info "Detected platform: ${os}-${arch}"
+
+    # 目前仅发布 macOS arm64 预编译产物；其他平台提示本地编译
+    if [ "$os" != "darwin" ] || [ "$arch" != "arm64" ]; then
+        error "未发布 ${os}-${arch} 预编译产物。本地编译: npm install -g scriptc && scriptc build cli/oc.ts -o $HOME/bin/oc"
+    fi
 
     # Download
     local tmp_file
