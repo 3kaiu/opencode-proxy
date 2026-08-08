@@ -9,6 +9,7 @@ api/proxy.js
 netlify/edge-functions/proxy.js
 deno/main.js
 supabase/functions/proxy/index.js
+supabase/functions/proxy/index.ts
 
 # Lock files
 package-lock.json
@@ -23,3 +24,4 @@ cloudflare/.wrangler/
 
 # Wrangler local state
 .wrangler/
+captures/

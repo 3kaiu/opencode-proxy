@@ -1,8 +1,12 @@
 {
   "name": "opencode-proxy",
-  "version": "1.3.0",
+  "version": "2.1.0",
   "private": true,
+  "type": "module",
   "devDependencies": {
     "esbuild": "^0.28.1"
+  },
+  "dependencies": {
+    "@valtown/sdk": "^4.0.0"
   }
 }

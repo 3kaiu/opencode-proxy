@@ -5,7 +5,13 @@
   },
   "deploy": {
     "entrypoint": "deno/main.js",
-    "include": ["deno/"]
+    "include": ["deno/"],
+    "org": "3kaiu",
+    "app": "deno-1"
   },
   "imports": {}
 }
+
+
+
+

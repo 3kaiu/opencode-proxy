@@ -4,8 +4,11 @@
 // 产物：各平台部署目录下的单文件脚本（平台侧不做任何 build）
 //   Vercel   → api/proxy.js                  (edge, esm, default export)
 //   Netlify  → netlify/edge-functions/proxy.js (edge, esm, default export)
-//   Deno     → deno/main.js                  (deno runtime, esm, Deno.serve)
+//   Deno     → deno/main.js                    (deno runtime, esm, Deno.serve)
 //   Supabase → supabase/functions/proxy/index.js (deno runtime, esm, Deno.serve)
+//
+// 产物文件名需与 .github/workflows/build-platforms.yml 的 Release 资产清单一致
+// （各平台部署 workflow 从 Release 下载部署，产物不进 git，由 .gitignore 忽略）。
 //
 // 用法：node scripts/build.mjs
 // 产物应提交到 git，各平台通过 GitHub Actions 构建后直接部署产物（平台侧不做 build）。
@@ -62,6 +65,7 @@ for (const t of targets) {
       format: t.format,
       target: "esnext",
       treeShaking: true,
+      metafile: true,
       drop: ["console", "debugger"],
       legalComments: "none",
       banner: { js: BANNER },
