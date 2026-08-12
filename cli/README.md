@@ -47,7 +47,7 @@ oc help               # 帮助
 
 ## 配置更新行为
 
-`oc use NAME` 只替换 baseURL，不会动配置里其他内容（opencode 的 `provider.oc.options.baseURL`）：
+`oc use NAME` 只替换 baseURL，不会动配置里其他内容（opencode 的 `provider.opencode.options.baseURL`）：
 
 | 发现位置 | 文件 |
 |----------|------|
@@ -68,4 +68,4 @@ oc add router https://<your-worker>.workers.dev/zen/v1
 oc use router
 ```
 
-客户端（Kimi Code / OpenCode）只配置一个指向路由器的端点即可。
+客户端（OpenCode）只配置一个指向路由器的端点即可。

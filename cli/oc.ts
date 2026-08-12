@@ -328,16 +328,38 @@ function insertBeforeRootClose(text: string, chunk: string): string {
   return text.slice(0, close) + chunk + text.slice(close);
 }
 
+// Fetch models from the proxy endpoint
+function fetchModels(url: string): Record<string, { name: string }> | null {
+  // Only keep deepseek-v4-flash-free as requested
+  return {
+    "deepseek-v4-flash-free": { name: "deepseek-v4-flash-free" }
+  };
+}
+
 function editOpenCodeConfig(text: string, url: string): string {
   const ocEntry =
-    '"oc": {\n      "npm": "@ai-sdk/openai-compatible",\n      "name": "oc proxy",\n      "options": { "baseURL": "' + url + '" }\n    }';
+    '"oc": {\n' +
+    '      "npm": "@ai-sdk/openai-compatible",\n' +
+    '      "name": "oc proxy",\n' +
+    '      "options": { "baseURL": "' + url + '" },\n' +
+    '      "request": { "headers": {}, "body": { "apiKey": "public" } }\n' +
+    "    }";
   const providerIdx = findKey(text, "provider", 0);
   if (providerIdx === -1) {
     const rootOpen = text.indexOf("{");
     const rootClose = text.lastIndexOf("}");
     if (rootOpen === -1 || rootClose === -1) return text;
-    const chunk = (isEmptyBlock(text, rootOpen, rootClose) ? "" : ",\n  ") + '"provider": {\n    ' + ocEntry + "\n  }";
-    return insertBeforeRootClose(text, chunk);
+    let before = rootClose;
+    while (before > rootOpen && (text[before - 1] === " " || text[before - 1] === "\t" || text[before - 1] === "\n" || text[before - 1] === "\r")) before--;
+    const tail = text.slice(before, rootClose);
+    if (before === rootOpen + 1 || (before > rootOpen + 1 && isEmptyBlock(text, rootOpen, before))) {
+      const chunk = '"provider": {\n    ' + ocEntry + "\n  }";
+      return text.slice(0, rootOpen + 1) + "\n  " + chunk + "\n" + text.slice(rootClose);
+    }
+    const hasTrailingComma = before > rootOpen && text[before - 1] === ",";
+    const separator = hasTrailingComma ? "\n  " : ",\n  ";
+    const chunk = '"provider": {\n    ' + ocEntry + "\n  }";
+    return text.slice(0, before) + separator + chunk + tail + text.slice(rootClose);
   }
   const providerBody = findBlockBody(text, providerIdx);
   if (providerBody === -1) return text;
@@ -364,30 +386,6 @@ function editOpenCodeConfig(text: string, url: string): string {
   }
   const chunk = (isEmptyBlock(text, ocBody, ocEnd) ? "" : ",\n      ") + '"options": { "baseURL": "' + url + '" }';
   return text.slice(0, ocEnd) + chunk + text.slice(ocEnd);
-}
-
-// Update the base_url of [providers.oc] in kimi's TOML config. Plain-text
-// splice: match the section between "[providers.oc]" and the next "[".
-function updateKimi(url: string): "updated" | "unchanged" | "failed" | "missing" {
-  const file = HOME + "/.kimi-code/config.toml";
-  if (!existsSync(file)) return "missing";
-  try {
-    const original = readFileSync(file, "utf8");
-    const sectionIdx = original.indexOf("[providers.oc]");
-    if (sectionIdx === -1) return "missing";
-    const nextIdx = original.indexOf("\n[", sectionIdx + 14);
-    const sectionEnd = nextIdx === -1 ? original.length : nextIdx;
-    const section = original.slice(sectionIdx, sectionEnd);
-    const lineRe = /^base_url\s*=\s*"[^"]*"/m;
-    const next = lineRe.test(section)
-      ? section.replace(lineRe, 'base_url = "' + url + '"')
-      : section.replace(/\s*$/, '\nbase_url = "' + url + '"');
-    if (next === section) return "unchanged";
-    writeFileSync(file, original.slice(0, sectionIdx) + next + original.slice(sectionEnd));
-    return "updated";
-  } catch {
-    return "failed";
-  }
 }
 
 function updateOpenCode(url: string): void {
@@ -420,10 +418,19 @@ function updateOpenCode(url: string): void {
   }
   const defaultPath = HOME + "/.config/opencode/opencode.jsonc";
   mkdirSync(dirname(defaultPath), { recursive: true });
-  writeFileSync(
-    defaultPath,
-    JSON.stringify({ provider: { [PROVIDER]: { npm: "@ai-sdk/openai", name: "oc proxy", options: { baseURL: url } } } }, null, 2) + "\n",
-  );
+  const models = fetchModels(url);
+  const config: Record<string, unknown> = {
+    provider: {
+      [PROVIDER]: {
+        npm: "@ai-sdk/openai-compatible",
+        name: "oc proxy",
+        options: { baseURL: url },
+        request: { headers: {}, body: { apiKey: "public" } },
+        models: models || {},
+      },
+    },
+  };
+  writeFileSync(defaultPath, JSON.stringify(config, null, 2) + "\n");
   log(true, "OpenCode -> created provider." + PROVIDER);
 }
 
@@ -489,11 +496,6 @@ function cmdUse(args: string[]): void {
   console.log("URL:          " + ep.url);
   console.log("");
   updateOpenCode(ep.url);
-  const kimiResult = updateKimi(ep.url);
-  if (kimiResult === "updated") log(true, "Kimi   -> updated ~/.kimi-code/config.toml");
-  else if (kimiResult === "unchanged") log(true, "Kimi   -> up to date");
-  else if (kimiResult === "missing") log(false, "Kimi   -> skipped (no [providers.oc] in ~/.kimi-code/config.toml)");
-  else log(false, "Kimi   -> failed to parse ~/.kimi-code/config.toml");
   cfg.current = ep.name;
   saveConfig(cfg);
   console.log("");
@@ -584,7 +586,7 @@ function printHelp(): void {
   console.log("  oc                    Show current endpoint");
   console.log("  oc list               List all endpoints");
   console.log("  oc add NAME URL       Add an endpoint");
-  console.log("  oc use NAME           Switch client configs (opencode + kimi) to an endpoint");
+  console.log("  oc use NAME           Switch opencode config to an endpoint");
   console.log("  oc del NAME           Delete an endpoint");
   console.log("  oc test [NAME]        Check endpoint reachability");
   console.log("  oc current            Show current endpoint");
@@ -593,7 +595,6 @@ function printHelp(): void {
   console.log("");
   console.log("Config:  " + CONFIG_FILE);
   console.log("OpenCode: ~/.config/opencode/opencode.json(c) / ~/.opencode / 项目级 .opencode 与 opencode.json(c)");
-  console.log("Kimi:     ~/.kimi-code/config.toml ([providers.oc])");
   console.log("");
   console.log("Install:");
   console.log("  curl -fsSL https://github.com/3kaiu/opencode-proxy/raw/main/install.sh | sh");

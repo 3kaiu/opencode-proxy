@@ -52,7 +52,7 @@ function makeForwardHeaders(request: Request): Headers {
 
 // 占位 apiKey 判定: 官方对 Bearer dummy / 空 key 返回 401/报错,
 // 转发前剥离, 让官方按未认证的免费模型处理
-const PLACEHOLDER_AUTH = /^(Bearer\s+)?(dummy|placeholder|sk-dummy|test|x|empty)$/i
+const PLACEHOLDER_AUTH = /^(Bearer\s+)?(dummy|placeholder|sk-dummy|test|x|empty|oc-proxy)$/i
 
 function stripPlaceholderAuth(headers: Headers): Headers {
   const auth = headers.get("authorization")
