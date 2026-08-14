@@ -7,10 +7,23 @@
     "entrypoint": "deno/main.js",
     "include": ["deno/"],
     "org": "3kaiu",
-    "app": "oc-deno-7"
+    "app": "oc-deno-1"
   },
   "imports": {}
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -297,7 +297,21 @@ function selectByReputation(endpoints: Endpoint[]): Endpoint[] {
     return { ep, score }
   })
   scored.sort((a, b) => b.score - a.score)
-  return scored.map(s => s.ep)
+  
+  // 对同分的端点进行随机排序，确保负载均衡
+  const result: Endpoint[] = []
+  let i = 0
+  while (i < scored.length) {
+    const currentScore = scored[i].score
+    const sameScoreGroup: Endpoint[] = []
+    while (i < scored.length && scored[i].score === currentScore) {
+      sameScoreGroup.push(scored[i].ep)
+      i++
+    }
+    // 对同分组内的端点进行 shuffle
+    result.push(...shuffle(sameScoreGroup))
+  }
+  return result
 }
 
 // ── IPv6 探测 ───────────────────────────────────────────────────────────────

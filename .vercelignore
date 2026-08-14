@@ -1,0 +1,42 @@
+# Dependencies
+node_modules
+**/node_modules
+
+# Build artifacts
+dist
+build
+.wrangler
+
+# Development
+.git
+.gitignore
+*.log
+.DS_Store
+
+# Other platforms
+deno
+fermyon
+fermyon-rust
+supabase
+wasmer
+valtown
+netlify
+
+# Scripts and docs
+scripts
+*.md
+LICENSE
+
+# Captures and logs
+captures
+captures-cf
+*.jsonl
+
+# Rust builds
+target
+**/target
+
+# IDE
+.vscode
+.idea
+*.swp
