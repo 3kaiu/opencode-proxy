@@ -5,4 +5,23 @@ account_id = "c93e250ae22b0e504fe9b311ae41422c"
 
 [[kv_namespaces]]
 binding = "ENDPOINT_STATE"
-id = "a1707a035cfd49d88c6bb2315e3739a6"
+id = "9a32f1ebe818470e9f4f219694988c80"
+
+[[d1_databases]]
+binding = "oc_router_logs"
+database_name = "oc-router-logs"
+database_id = "926d6ce6-ac7f-4441-9617-8825967504c5"
+
+# Queue: 批量聚合 D1 日志写入 (免费 100万操作/月)
+[[queues.producers]]
+queue = "oc-router-logs"
+binding = "LOG_QUEUE"
+
+[[queues.consumers]]
+queue = "oc-router-logs"
+max_batch_size = 50
+max_batch_timeout = 30
+
+# Cron: 每分钟健康检查 + 清理
+[triggers]
+crons = ["* * * * *"]
